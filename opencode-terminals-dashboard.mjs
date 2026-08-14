@@ -11,6 +11,11 @@ import process from 'process';
 const DASHBOARD_PORT = 31337;
 const LEASE_PORT = 31338;
 const HEARTBEAT_URL = `http://127.0.0.1:${DASHBOARD_PORT}/api/heartbeat`;
+const RUNNING_DECAY_MS = 12000;
+const STALE_SUBAGENT_PRUNE_MS = 30000;
+const STALE_HEARTBEAT_PURGE_MS = 15000;
+const CLOSED_SESSION_RETENTION_MS = 15000;
+const COLD_CACHE_MS = 5 * 60 * 1000;
 
 // Module-level global rate limiter shared across all plugin listeners
 const globalSessionThrottles = new Map();
@@ -370,14 +375,17 @@ function setupPlugin(ctx) {
   async function sendAllReports(force = false) {
     const now = Date.now();
     for (const [id, s] of sessions.entries()) {
+      const inactiveMs = now - s.lastActivityTime;
+
       // Inactivity Decay: If session was marked 'running', but no events arrived for 12s, decay to 'waiting'
-      if (s.status === 'running' && (now - s.lastActivityTime > 12000)) {
+      if (s.status === 'running' && inactiveMs > RUNNING_DECAY_MS) {
         s.status = s.waitingForUser ? 'user_response' : 'waiting';
       }
 
-      // Sub-agent completion: If sub-agent has been inactive for > 6s, mark closed & remove from plugin reporting
-      if (s.parentId && (now - s.lastActivityTime > 6000)) {
-        s.status = 'closed';
+      // Quiet sub-agents should fade out of reporting instead of bouncing CLOSED -> RUNNING.
+      if (s.parentId && !s.waitingForUser && inactiveMs > STALE_SUBAGENT_PRUNE_MS) {
+        sessions.delete(id);
+        continue;
       }
 
       await sendReportForSession(s, now, force);
@@ -620,16 +628,16 @@ function startServer() {
   setInterval(() => {
     const now = Date.now();
     for (const [id, session] of activeSessions.entries()) {
-      // 1. Mark session closed if missing heartbeats for > 6 seconds
-      if (session.status !== 'closed' && now - session.lastHeartbeat > 6000) {
-        log('TIMEOUT', `Session timeout, marking as closed: ${shortId(id)} (${session.title})`);
-        session.status = 'closed';
-        session.closedAt = now;
+      // Stale sessions should disappear quietly unless an explicit close event was received.
+      if (session.status !== 'closed' && now - session.lastHeartbeat > STALE_HEARTBEAT_PURGE_MS) {
+        log('PURGE', `Session heartbeat expired: ${shortId(id)} (${session.title})`);
+        activeSessions.delete(id);
+        continue;
       }
 
-      // 2. Retain closed sessions (main or subagent) for 15 seconds before purging completely
-      if (session.status === 'closed' && session.closedAt && (now - session.closedAt > 15000)) {
-        log('PURGE', `Closed session retention expired (15s): ${shortId(id)} (${session.title})`);
+      // Retain explicit closed sessions briefly before purging completely.
+      if (session.status === 'closed' && session.closedAt && (now - session.closedAt > CLOSED_SESSION_RETENTION_MS)) {
+        log('PURGE', `Closed session retention expired (${CLOSED_SESSION_RETENTION_MS / 1000}s): ${shortId(id)} (${session.title})`);
         activeSessions.delete(id);
       }
     }
@@ -690,6 +698,10 @@ function startServer() {
     const isWaitingState = s.status === 'waiting' || s.status === 'user_response' || s.status === 'interrupted';
     const waitingTimeMs = isWaitingState ? (now - s.statusChangedAt) : 0;
     const endTime = s.closedAt ? s.closedAt : now;
+    const runtimeMs = s.status === 'running'
+      ? Math.max(0, endTime - (s.runningSince || s.statusChangedAt || s.startTime))
+      : Math.max(0, s.lastRuntimeMs || 0);
+    const uptimeMs = Math.max(0, endTime - s.startTime);
 
     return {
       id: id,
@@ -699,8 +711,10 @@ function startServer() {
       parentId: s.parentId,
       status: parseStatusInfo(s.status),
       startTime: s.startTime,
-      totalRunningTime: formatCompactDuration(endTime - s.startTime),
+      totalUptime: formatCompactDuration(uptimeMs),
+      runtime: formatCompactDuration(runtimeMs),
       waitingTime: isWaitingState ? formatCompactDuration(waitingTimeMs) : null,
+      isCacheCold: isWaitingState && waitingTimeMs >= COLD_CACHE_MS,
       cost: formatCost(s.cost),
       tokens: formatTokens(s.tokens),
       error: s.error || null,
@@ -787,8 +801,9 @@ function startServer() {
 
     function metaLine(c, extended) {
       var line1 = [];
-      line1.push('<span class="label">Runtime:</span> <span class="value">' + c.totalRunningTime + '</span>');
-      if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>');
+      line1.push('<span class="label">Total uptime:</span> <span class="value">' + c.totalUptime + '</span>');
+      line1.push('<span class="divider">-</span> <span class="label">Runtime:</span> <span class="value">' + c.runtime + '</span>');
+      if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>' + (c.isCacheCold ? ' <span class="cold-cache" title="Cache cold">&#10052;</span>' : ''));
       if (extended && c.msgCount > 0) line1.push('<span class="divider">-</span> <span class="label">Msgs:</span> <span class="value">' + c.msgCount + '</span>');
 
       var line2 = [];
@@ -1009,6 +1024,7 @@ function startServer() {
     .time-compact .value { font-weight: 600; color: #f8fafc; }
     .time-compact .divider { margin: 0 6px; color: #475569; }
     .time-compact .highlight-waiting { color: #fde047; font-weight: 600; }
+    .time-compact .cold-cache { color: #7dd3fc; font-size: 0.9rem; vertical-align: middle; }
     .time-compact > div + div { margin-top: 2px; }
 
     .controls { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
@@ -1126,6 +1142,15 @@ function startServer() {
 
           if (data.sessionId && isSessionId(data.sessionId)) {
             const now = Date.now();
+            const reportTimestamp = typeof data.timestamp === 'number' && isFinite(data.timestamp) ? data.timestamp : now;
+            const existing = activeSessions.get(data.sessionId);
+
+            if (existing && typeof existing.lastReportTimestamp === 'number' && reportTimestamp < existing.lastReportTimestamp) {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: true }));
+              return;
+            }
+
             const lastLog = serverLastLogs.get(data.sessionId) || { time: 0, status: '', title: '' };
 
             const statusChanged = data.status !== lastLog.status;
@@ -1140,9 +1165,17 @@ function startServer() {
 
             if (data.status === 'closed') {
               log('CLOSE', `Terminal closed signal received: ${shortId(data.sessionId)}`);
-              const existing = activeSessions.get(data.sessionId);
               if (existing) {
+                const wasRunning = existing.status === 'running';
+                const runningSince = existing.runningSince || existing.statusChangedAt || existing.startTime || now;
+                if (wasRunning) {
+                  existing.lastRuntimeMs = Math.max(0, now - runningSince);
+                }
                 existing.status = 'closed';
+                existing.runningSince = null;
+                existing.lastHeartbeat = now;
+                existing.lastReportTimestamp = reportTimestamp;
+                existing.statusChangedAt = now;
                 if (!existing.closedAt) existing.closedAt = now;
               } else {
                 activeSessions.set(data.sessionId, {
@@ -1155,6 +1188,9 @@ function startServer() {
                   statusChangedAt: now,
                   closedAt: now,
                   lastHeartbeat: now,
+                  lastReportTimestamp: reportTimestamp,
+                  runningSince: null,
+                  lastRuntimeMs: 0,
                   cost: data.cost,
                   tokens: data.tokens,
                   error: data.error,
@@ -1178,41 +1214,62 @@ function startServer() {
                 status: 'running',
                 startTime: now,
                 statusChangedAt: now,
-                lastHeartbeat: now
+                lastHeartbeat: now,
+                lastReportTimestamp: reportTimestamp,
+                runningSince: now,
+                lastRuntimeMs: 0
               });
               log('PARENT-AUTO', `Created parent placeholder: ${shortId(data.parentId)}`);
             }
 
             const validParentId = (data.parentId && isSessionId(data.parentId)) ? data.parentId : null;
             const isNew = !activeSessions.has(data.sessionId);
-            const existing = activeSessions.get(data.sessionId);
+            const current = activeSessions.get(data.sessionId);
             
             let rawTitle = cleanTitle(data.title) || (validParentId ? 'Sub-Agent Task' : 'Active Terminal');
-            if (existing && existing.title && existing.title !== 'Active Terminal' && existing.title !== 'Sub-Agent Task' && (rawTitle === 'Active Terminal' || rawTitle === 'Sub-Agent Task')) {
-              rawTitle = existing.title;
+            if (current && current.title && current.title !== 'Active Terminal' && current.title !== 'Sub-Agent Task' && (rawTitle === 'Active Terminal' || rawTitle === 'Sub-Agent Task')) {
+              rawTitle = current.title;
             }
 
-            const prevStatus = existing ? existing.status : null;
+            const prevStatus = current ? current.status : null;
             const isStatusChanged = prevStatus !== data.status;
-            const statusChangedAt = isStatusChanged ? now : (existing ? existing.statusChangedAt : now);
+            const statusChangedAt = isStatusChanged ? now : (current ? current.statusChangedAt : now);
+            const runningSince = (() => {
+              if (data.status === 'running') {
+                if (prevStatus === 'running' && current && current.runningSince) return current.runningSince;
+                return now;
+              }
+              return null;
+            })();
+            const lastRuntimeMs = (() => {
+              if (!current) return 0;
+              if (prevStatus === 'running' && data.status !== 'running') {
+                const startedAt = current.runningSince || current.statusChangedAt || current.startTime || now;
+                return Math.max(0, now - startedAt);
+              }
+              return current.lastRuntimeMs || 0;
+            })();
 
             activeSessions.set(data.sessionId, {
               title: rawTitle,
-              agent: data.agent || (existing ? existing.agent : 'Build'),
-              model: data.model || (existing ? existing.model : 'Claude Haiku 4.5'),
-              parentId: validParentId || (existing ? existing.parentId : null),
+              agent: data.agent || (current ? current.agent : 'Build'),
+              model: data.model || (current ? current.model : 'Claude Haiku 4.5'),
+              parentId: validParentId || (current ? current.parentId : null),
               status: data.status,
-              startTime: existing ? existing.startTime : now,
+              startTime: current ? current.startTime : now,
               statusChangedAt: statusChangedAt,
               closedAt: null,
               lastHeartbeat: now,
-              cost: (typeof data.cost === 'number') ? data.cost : (existing ? existing.cost : undefined),
-              tokens: data.tokens || (existing ? existing.tokens : undefined),
-              error: data.error || (existing ? existing.error : undefined),
-              retryInfo: data.retryInfo || (existing ? existing.retryInfo : undefined),
-              msgCount: (typeof data.msgCount === 'number') ? data.msgCount : (existing ? existing.msgCount : 0),
-              compactionCount: (typeof data.compactionCount === 'number') ? data.compactionCount : (existing ? existing.compactionCount : 0),
-              todos: data.todos || (existing ? existing.todos : undefined)
+              lastReportTimestamp: reportTimestamp,
+              runningSince: runningSince,
+              lastRuntimeMs: lastRuntimeMs,
+              cost: (typeof data.cost === 'number') ? data.cost : (current ? current.cost : undefined),
+              tokens: data.tokens || (current ? current.tokens : undefined),
+              error: data.error || (current ? current.error : undefined),
+              retryInfo: data.retryInfo || (current ? current.retryInfo : undefined),
+              msgCount: (typeof data.msgCount === 'number') ? data.msgCount : (current ? current.msgCount : 0),
+              compactionCount: (typeof data.compactionCount === 'number') ? data.compactionCount : (current ? current.compactionCount : 0),
+              todos: data.todos || (current ? current.todos : undefined)
             });
 
             if (isNew) {
