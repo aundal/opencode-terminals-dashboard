@@ -77,6 +77,9 @@ opencode terminal B ──┤  TCP lease (31338)  ┌─────────
 
 ## Security notes
 
+- **Write protection:** `POST /api/heartbeat` requires a bearer token when the `DASHBOARD_TOKEN` environment variable is set (set it on the machine running opencode — spawned servers inherit it). Without a token, heartbeats are rejected with `401`. If `DASHBOARD_TOKEN` is unset, the server stays open (backwards compatible).
+- **Read endpoints are open:** `GET /api/data` and the dashboard page require no auth and the server binds `0.0.0.0` — session titles, agent/model, todos, cost and error messages are visible to anyone on the LAN. Use the token for write protection, or bind the server to localhost if LAN visibility is not needed.
+- **Token consistency:** all opencode terminals must share the same `DASHBOARD_TOKEN`. A terminal without the token will silently get `401` responses and its sessions will not appear.
 - All event-derived strings are HTML-escaped before rendering (XSS-safe).
 - Session IDs are strictly validated (`ses_` prefix; `msg_`/`prt_` IDs rejected).
-- The server binds `0.0.0.0` for LAN visibility; data contains only session metadata (title, agent, model, status, todos, cost/tokens).
+- The lease port (`31338`) binds `127.0.0.1` only.

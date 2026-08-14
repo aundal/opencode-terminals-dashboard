@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import net from 'net';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import process from 'process';
@@ -341,9 +342,11 @@ function setupPlugin(ctx) {
     globalSessionLastState.set(s.sessionId, { status: s.status, title: s.title });
 
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (process.env.DASHBOARD_TOKEN) headers['Authorization'] = 'Bearer ' + process.env.DASHBOARD_TOKEN;
       await fetch(HEARTBEAT_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({
           sessionId: s.sessionId,
           parentId: s.parentId,
@@ -572,6 +575,18 @@ function log(tag, message) {
 function startServer() {
   log('INIT', `Starting Web Server on port ${DASHBOARD_PORT}...`);
 
+  // ---- Write-protection: heartbeats require a bearer token (read endpoints stay open).
+  //      If DASHBOARD_TOKEN is unset, the server stays open (backwards compatible).
+  const TOKEN = process.env.DASHBOARD_TOKEN || null;
+  function tokenMatches(req) {
+    if (!TOKEN) return true;
+    const auth = req.headers['authorization'] || '';
+    const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    const a = crypto.createHash('sha256').update(provided).digest();
+    const b = crypto.createHash('sha256').update(TOKEN).digest();
+    return crypto.timingSafeEqual(a, b);
+  }
+
   // ---- Lease tracking: each opencode terminal holds one TCP lease. When the last
   //      lease drops, the dashboard server shuts itself down (no terminals = no dashboard).
   const leaseSockets = new Set();
@@ -771,16 +786,19 @@ function startServer() {
     }
 
     function metaLine(c, extended) {
-      var parts = [];
-      parts.push('<span class="label">Runtime:</span> <span class="value">' + c.totalRunningTime + '</span>');
-      if (extended && c.cost) parts.push('<span class="divider">-</span> <span class="label">Cost:</span> <span class="value">' + esc(c.cost) + '</span>');
-      if (extended && c.tokens) parts.push('<span class="divider">-</span> <span class="label">Tokens:</span> <span class="value">' + esc(c.tokens) + '</span>');
-      if (c.waitingTime) parts.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>');
-      if (extended && (c.msgCount > 0 || c.compactionCount > 0)) {
-        parts.push('<span class="divider">-</span> <span class="label">Msgs:</span> <span class="value">' + c.msgCount + '</span>');
-        parts.push('<span class="divider">-</span> <span class="label">Compactions:</span> <span class="value">' + c.compactionCount + '</span>');
-      }
-      return parts.join(' ');
+      var line1 = [];
+      line1.push('<span class="label">Runtime:</span> <span class="value">' + c.totalRunningTime + '</span>');
+      if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>');
+      if (extended && c.msgCount > 0) line1.push('<span class="divider">-</span> <span class="label">Msgs:</span> <span class="value">' + c.msgCount + '</span>');
+
+      var line2 = [];
+      if (extended && c.cost) line2.push('<span class="label">Cost:</span> <span class="value">' + esc(c.cost) + '</span>');
+      if (extended && c.tokens) line2.push('<span class="divider">-</span> <span class="label">Tokens:</span> <span class="value">' + esc(c.tokens) + '</span>');
+      if (extended && c.compactionCount > 0) line2.push('<span class="divider">-</span> <span class="label">Compactions:</span> <span class="value">' + c.compactionCount + '</span>');
+
+      var html = '<div>' + line1.join('') + '</div>';
+      if (line2.length) html += '<div>' + line2.join('') + '</div>';
+      return html;
     }
 
     function todoIcon(status) {
@@ -991,6 +1009,7 @@ function startServer() {
     .time-compact .value { font-weight: 600; color: #f8fafc; }
     .time-compact .divider { margin: 0 6px; color: #475569; }
     .time-compact .highlight-waiting { color: #fde047; font-weight: 600; }
+    .time-compact > div + div { margin-top: 2px; }
 
     .controls { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
     .controls input, .controls select {
@@ -1094,6 +1113,11 @@ function startServer() {
 
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/api/heartbeat') {
+      if (!tokenMatches(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+        return;
+      }
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
