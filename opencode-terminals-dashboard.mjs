@@ -457,6 +457,7 @@ function setupPlugin(ctx) {
     } else if (coreStatus === 'busy' || type.includes('busy') || type.includes('tool') || type.includes('execut') || type.includes('running') || type.includes('delta')) {
       status = 'running';
       if (s) s.waitingForUser = false;
+      if (s) s.error = null;
     } else if (coreStatus === 'idle' || type === 'session.idle' || type === 'idle') {
       status = 'waiting';
       if (s) s.waitingForUser = false;
@@ -675,7 +676,7 @@ function startServer() {
 
   function formatCost(cost) {
     if (typeof cost !== 'number' || !isFinite(cost)) return null;
-    return '$' + cost.toFixed(4);
+    return '$' + cost.toFixed(2);
   }
 
   function formatTokens(tokens) {
@@ -775,6 +776,56 @@ function startServer() {
     window.openStates = window.openStates || {};
     window.lastStatuses = window.lastStatuses || {};
 
+    window.dashboardLabels = {};
+    try { window.dashboardLabels = JSON.parse(localStorage.getItem('dashboardLabels') || '{}'); } catch(e) {}
+
+    function getLabel(id) { return window.dashboardLabels[id] || null; }
+    function setLabel(id, label) {
+      if (label) window.dashboardLabels[id] = label; else delete window.dashboardLabels[id];
+      try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e) {}
+    }
+
+    function labelBadge(id) {
+      var l = getLabel(id);
+      return l ? '<span class="session-label">' + esc(l) + '</span>' : '';
+    }
+
+    function closeMenu() {
+      if (window._labelMenu) { window._labelMenu.remove(); window._labelMenu = null; }
+    }
+
+    function showLabelMenu(x, y, id) {
+      closeMenu();
+      var menu = document.createElement('div');
+      menu.className = 'context-menu';
+      var setBtn = document.createElement('button');
+      setBtn.textContent = 'Set label...';
+      setBtn.onclick = function() {
+        var v = prompt('Label for session:', getLabel(id) || '');
+        if (v !== null) { setLabel(id, v.trim()); refresh(); }
+        closeMenu();
+      };
+      var clearBtn = document.createElement('button');
+      clearBtn.textContent = 'Remove label';
+      clearBtn.onclick = function() { setLabel(id, null); refresh(); closeMenu(); };
+      menu.appendChild(setBtn);
+      menu.appendChild(clearBtn);
+      menu.style.left = x + 'px';
+      menu.style.top = y + 'px';
+      document.body.appendChild(menu);
+      window._labelMenu = menu;
+      setTimeout(function() { document.addEventListener('click', closeMenu, { once: true }); }, 0);
+    }
+
+    document.addEventListener('contextmenu', function(e) {
+      var el = e.target.closest ? e.target.closest('.card, .sub-card') : null;
+      if (!el) return;
+      var id = el.getAttribute('data-session-id');
+      if (!id) return;
+      e.preventDefault();
+      showLabelMenu(e.clientX, e.clientY, id);
+    });
+
     function shortId(id) {
       if (!id || typeof id !== 'string') return 'none';
       return id.length > 6 ? '...' + id.slice(-6) : id;
@@ -785,6 +836,9 @@ function startServer() {
     }
 
     function statusTitle(c) {
+      if (c.error && (c.status.type === 'interrupted' || c.status.type === 'failed')) {
+        return 'Error: ' + c.error;
+      }
       if (c.status.type === 'retrying' && c.retryInfo) {
         var r = c.retryInfo;
         var t = 'Retry';
@@ -795,20 +849,18 @@ function startServer() {
       return '';
     }
 
-    function cardTitle(c) {
-      return c.error ? 'Error: ' + c.error : '';
-    }
-
-    function metaLine(c, extended) {
+    function metaLine(c, extended, compact) {
       var line1 = [];
-      line1.push('<span class="label">Total uptime:</span> <span class="value">' + c.totalUptime + '</span>');
-      line1.push('<span class="divider">-</span> <span class="label">Runtime:</span> <span class="value">' + c.runtime + '</span>');
-      if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>' + (c.isCacheCold ? ' <span class="cold-cache" title="Cache cold">&#10052;</span>' : ''));
-      if (extended && c.msgCount > 0) line1.push('<span class="divider">-</span> <span class="label">Msgs:</span> <span class="value">' + c.msgCount + '</span>');
+      if (!compact) {
+        line1.push('<span class="label">Uptime:</span> <span class="value">' + c.totalUptime + '</span>');
+        line1.push('<span class="divider">-</span> <span class="label">Runtime:</span> <span class="value">' + c.runtime + '</span>');
+        if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>' + (c.isCacheCold ? ' <span class="cold-cache" title="Cache cold">&#10052;</span>' : ''));
+      }
 
       var line2 = [];
-      if (extended && c.cost) line2.push('<span class="label">Cost:</span> <span class="value">' + esc(c.cost) + '</span>');
-      if (extended && c.tokens) line2.push('<span class="divider">-</span> <span class="label">Tokens:</span> <span class="value">' + esc(c.tokens) + '</span>');
+      if (extended && c.msgCount > 0) line2.push('<span class="label">Msgs:</span> <span class="value">' + c.msgCount + '</span>');
+      if (extended && c.cost) line2.push('<span class="divider">-</span> <span class="label">Cost:</span> <span class="value">' + esc(c.cost) + '</span>');
+      if (extended && c.tokens) line2.push('<span class="divider">-</span> <span class="label">Tokens:</span> <span class="value" title="In = tokens sent to the model (prompt, context, tools) / Out = tokens generated by the model (response, reasoning)">' + esc(c.tokens) + '</span>');
       if (extended && c.compactionCount > 0) line2.push('<span class="divider">-</span> <span class="label">Compactions:</span> <span class="value">' + c.compactionCount + '</span>');
 
       var html = '<div>' + line1.join('') + '</div>';
@@ -870,33 +922,35 @@ function startServer() {
       } catch(e) {}
     }
 
-    function checkAlarms(cards, mode) {
-      if (mode === 'off') { window.lastStatuses = {}; return; }
+    function checkAlarms(cards, jobsDone, errors, users) {
+      if (!jobsDone && !errors && !users) { window.lastStatuses = {}; return; }
       var now = {};
       cards.forEach(function(c) { now[c.id] = c.status.type; });
       Object.keys(now).forEach(function(id) {
         var prev = window.lastStatuses[id];
         if (prev && prev !== now[id]) {
-          if (now[id] === 'failed') beep(880, 0.5);
-          else if (now[id] === 'user_response' && mode === 'error_user') beep(660, 0.3);
+          if (now[id] === 'failed' && errors) beep(880, 0.5);
+          else if (now[id] === 'user_response' && users) beep(660, 0.3);
+          else if (now[id] === 'closed' && jobsDone) beep(520, 0.3);
         }
       });
       window.lastStatuses = now;
     }
 
-    function renderSubAgent(sub) {
-      var extended = document.getElementById('infoMode').value === 'extended';
+    function renderSubAgent(sub, mode) {
+      var extended = mode === 'extended';
+      var compact = mode === 'compact';
       var badgeTitle = statusTitle(sub);
-      return '<div class="sub-card status-' + sub.status.color + '"' + (cardTitle(sub) ? ' title="' + esc(cardTitle(sub)) + '"' : '') + '>' +
+      return '<div class="sub-card status-' + sub.status.color + '" data-session-id="' + sub.id + '">' +
         '<div class="card-header">' +
-          '<div class="sub-session-title">&#129302; ' + esc(sub.title) + '</div>' +
+          '<div class="sub-session-title">&#129302; ' + esc(sub.title) + labelBadge(sub.id) + '</div>' +
           '<div class="subtitle-row">' +
             '<span class="sub-session-subtitle">' + esc(sub.agent) + ' (' + esc(sub.model) + ')</span>' +
             '<span class="badge badge-' + sub.status.color + '"' + (badgeTitle ? ' title="' + esc(badgeTitle) + '"' : '') + '>' + sub.status.label + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="card-body">' +
-          '<div class="time-compact">' + metaLine(sub, extended) + '</div>' +
+          '<div class="time-compact">' + metaLine(sub, extended, compact) + '</div>' +
         '</div>' +
         todosHTML(sub) +
       '</div>';
@@ -904,10 +958,15 @@ function startServer() {
 
     function render(cards) {
       var container = document.getElementById('grid');
-      var extended = document.getElementById('infoMode').value === 'extended';
+      var mode = document.getElementById('infoMode').value;
+      var extended = mode === 'extended';
+      var compact = mode === 'compact';
       var q = document.getElementById('filterInput').value.trim().toLowerCase();
 
-      checkAlarms(cards, document.getElementById('alarmMode').value);
+      checkAlarms(cards,
+        document.getElementById('alarmJobsDone').value === 'yes',
+        document.getElementById('alarmErrors').value === 'yes',
+        document.getElementById('alarmUsers').value === 'yes');
 
       // Preserve open/closed state of accordion elements across 1-second auto-refreshes
       document.querySelectorAll('.sub-agents-details[data-card-id], .todos-details[data-card-id]').forEach(function(el) {
@@ -944,26 +1003,26 @@ function startServer() {
                   '<span class="chevron">&#9654;</span> ACTIVE SUB-AGENTS (' + c.subAgents.length + '):' +
                 '</summary>' +
                 '<div class="sub-agents-list">' +
-                  c.subAgents.map(renderSubAgent).join('') +
+                  c.subAgents.map(function(sub) { return renderSubAgent(sub, mode); }).join('') +
                 '</div>' +
               '</details>' +
             '</div>'
           : '';
 
-        return '<div class="card status-' + c.status.color + '"' + (cardTitle(c) ? ' title="' + esc(cardTitle(c)) + '"' : '') + '>' +
+        return '<div class="card status-' + c.status.color + '" data-session-id="' + c.id + '">' +
           '<div class="card-header">' +
-            '<div class="session-title">' + esc(c.title) + '</div>' +
+            '<div class="session-title">' + esc(c.title) + labelBadge(c.id) + '</div>' +
             '<div class="subtitle-row">' +
               '<span class="session-subtitle">' + esc(c.agent) + ' (' + esc(c.model) + ')</span>' +
               '<span class="badge badge-' + c.status.color + '"' + (badgeTitle ? ' title="' + esc(badgeTitle) + '"' : '') + '>' + c.status.label + '</span>' +
             '</div>' +
           '</div>' +
           '<div class="card-body">' +
-            '<div class="time-compact">' + metaLine(c, extended) + '</div>' +
+            '<div class="time-compact">' + metaLine(c, extended, compact) + '</div>' +
           '</div>' +
           todosHTML(c) +
           subAgentsHTML +
-          '<div class="card-footer">Session ID: ' + shortId(c.id) + '</div>' +
+          (compact ? '' : '<div class="card-footer">Session ID: ' + shortId(c.id) + '</div>') +
         '</div>';
       }).join('');
 
@@ -972,13 +1031,19 @@ function startServer() {
 
     function loadSettings() {
       var infoMode = document.getElementById('infoMode');
-      var alarmMode = document.getElementById('alarmMode');
       var savedInfo = localStorage.getItem('dashboardInfoMode');
-      var savedAlarm = localStorage.getItem('dashboardAlarmMode');
       if (savedInfo) infoMode.value = savedInfo;
-      if (savedAlarm) alarmMode.value = savedAlarm;
       infoMode.addEventListener('change', function() { localStorage.setItem('dashboardInfoMode', infoMode.value); refresh(); });
-      alarmMode.addEventListener('change', function() { localStorage.setItem('dashboardAlarmMode', alarmMode.value); });
+      [
+        ['alarmJobsDone', 'dashboardAlarmJobsDone'],
+        ['alarmErrors', 'dashboardAlarmErrors'],
+        ['alarmUsers', 'dashboardAlarmUsers']
+      ].forEach(function(pair) {
+        var sel = document.getElementById(pair[0]);
+        var saved = localStorage.getItem(pair[1]);
+        if (saved) sel.value = saved;
+        sel.addEventListener('change', function() { localStorage.setItem(pair[1], sel.value); });
+      });
       document.getElementById('filterInput').addEventListener('input', refresh);
     }
 
@@ -1026,6 +1091,10 @@ function startServer() {
     .time-compact .highlight-waiting { color: #fde047; font-weight: 600; }
     .time-compact .cold-cache { color: #7dd3fc; font-size: 0.9rem; vertical-align: middle; }
     .time-compact > div + div { margin-top: 2px; }
+    .session-label { display: inline-block; margin-left: 8px; font-size: 0.7rem; font-weight: 600; color: #0f172a; background: #7dd3fc; border-radius: 4px; padding: 1px 6px; vertical-align: middle; }
+    .context-menu { position: fixed; background: #1e293b; border: 1px solid #334155; border-radius: 6px; box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4); padding: 4px; z-index: 1000; min-width: 140px; }
+    .context-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: #f8fafc; padding: 6px 10px; font-size: 0.8rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; border-radius: 4px; }
+    .context-menu button:hover { background: #334155; }
 
     .controls { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
     .controls input, .controls select {
@@ -1036,6 +1105,12 @@ function startServer() {
     .controls input::placeholder { color: #64748b; }
     .controls select { cursor: pointer; }
     .controls select:hover { border-color: #475569; }
+
+    .alarm-section { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 6px 12px; }
+    .alarm-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-right: 4px; }
+    .alarm-section label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #cbd5e1; }
+    .alarm-section select { background: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; font-size: 0.8rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; }
+    .alarm-section select:hover { border-color: #475569; }
 
     .card-footer { margin-top: auto; padding-top: 10px; font-size: 0.7rem; color: #64748b; border-top: 1px solid #334155; }
     
@@ -1109,16 +1184,18 @@ function startServer() {
 <body>
   <h1>OpenCode Active Terminals Dashboard</h1>
   <div class="controls">
-    <input id="filterInput" type="text" placeholder="Filter: titel, agent, status..." />
+    <input id="filterInput" type="text" placeholder="Filter: title, agent, status..." />
     <select id="infoMode">
+      <option value="compact">Compact</option>
       <option value="standard">Standard</option>
-      <option value="extended">Udvidet</option>
+      <option value="extended">Extended</option>
     </select>
-    <select id="alarmMode">
-      <option value="off">Alarm: Fra</option>
-      <option value="error">Alarm: Fejl</option>
-      <option value="error_user">Alarm: Fejl + Bruger</option>
-    </select>
+    <div class="alarm-section">
+      <span class="alarm-title">Alarms</span>
+      <label>Jobs done: <select id="alarmJobsDone"><option value="no">No</option><option value="yes">Yes</option></select></label>
+      <label>Errors: <select id="alarmErrors"><option value="no">No</option><option value="yes">Yes</option></select></label>
+      <label>User requests: <select id="alarmUsers"><option value="no">No</option><option value="yes">Yes</option></select></label>
+    </div>
   </div>
   <div id="content">
     <div id="grid" class="grid">Listening for active terminal heartbeats...</div>
