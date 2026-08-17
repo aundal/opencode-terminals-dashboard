@@ -1,6 +1,6 @@
 # opencode-terminals-dashboard
 
-Live dashboard for opencode agent sessions — browser-based, real-time, zero dependencies.
+Live dashboard for opencode agent sessions — browser-based, real-time, zero dependencies. Comes with an optional TUI sidebar plugin that shows live session status inside the opencode terminal UI.
 
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
 
@@ -21,6 +21,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Alarm sounds** — Web Audio beeps on status transitions: off / errors / errors + user responses
 - **Auto-start & auto-kill server** — spawned on demand by the first opencode terminal, exits 30s after the last terminal closes
 - **Self-healing** — if the server dies, running terminals respawn it and immediately resync all sessions
+- **TUI sidebar plugin** — foldable `Terminal Dashboard:` section in the opencode TUI sidebar with live per-session status
 
 ## Installation
 
@@ -37,6 +38,43 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
    ```
    http://localhost:31337
    ```
+
+### TUI Sidebar Plugin (optional)
+
+Shows a foldable `Terminal Dashboard:` section in the opencode TUI sidebar. Each session is listed with a status dot and its title (capped at 35 chars); sub-agents are indented under their parent. Click the header to expand/collapse (state is persisted).
+
+Status colors:
+
+| Status | Color |
+|--------|-------|
+| running | green |
+| user_response | yellow |
+| failed / interrupted | red |
+| retrying | orange |
+| closed | gray |
+| waiting / unknown | white |
+
+1. Copy the sidebar plugin into your opencode plugins folder:
+
+   ```
+   ~/.config/opencode/plugins/terminal-dashboard-sidebar.tsx
+   ```
+
+2. Add it to the `plugin` array in `~/.config/opencode/tui.json`:
+
+   ```json
+   {
+     "plugin": [
+       "./plugins/terminal-dashboard-sidebar.tsx"
+     ]
+   }
+   ```
+
+3. Make sure the dashboard server plugin (`opencode-terminals-dashboard.mjs`) is installed — the sidebar reads its data from `http://127.0.0.1:31337/api/data`.
+
+4. Restart opencode. The section appears in the sidebar of the session view.
+
+> TUI plugins need `@opentui/solid` and `solid-js` in your config folder's `package.json`. opencode installs these automatically on startup.
 
 The server is started automatically by the first opencode terminal and stopped 30 seconds after the last terminal closes. No manual setup required.
 
