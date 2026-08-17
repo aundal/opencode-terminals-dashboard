@@ -63,13 +63,23 @@ function SidebarView(props: { api: any }) {
     } catch {}
   };
 
+  const openSession = (item: any) => {
+    if (!item?.id) return;
+    try {
+      props.api.route?.navigate?.("session", { sessionID: item.id });
+    } catch {}
+  };
+
   const renderCard = (c: any, depth: number) => {
     const indent = depth > 0 ? "  " : "";
     return (
       <For each={[c]}>
         {(item) => (
           <>
-            <text fg={theme().textMuted}>
+            <text
+              fg={theme().textMuted}
+              onMouseDown={depth === 0 ? () => openSession(item) : undefined}
+            >
               {indent}
               <span style={{ fg: statusColor(theme(), item.status?.type) }}>●</span>{" "}
               {clipTitle(item.title)}

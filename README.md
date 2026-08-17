@@ -41,7 +41,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 
 ### TUI Sidebar Plugin (optional)
 
-Shows a foldable `Terminal Dashboard:` section in the opencode TUI sidebar. Each session is listed with a status dot and its title (capped at 35 chars); sub-agents are indented under their parent. Click the header to expand/collapse (state is persisted).
+Shows a foldable `Terminal Dashboard:` section in the opencode TUI sidebar. Each session is listed with a status dot and its title (capped at 35 chars); sub-agents are indented under their parent. Click a session to open it in the current terminal. Click the header to expand/collapse (state is persisted).
 
 Status colors:
 
