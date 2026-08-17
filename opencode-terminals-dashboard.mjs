@@ -234,6 +234,7 @@ function isQuestionOrPermissionEvent(event) {
 // ====================================================================
 function setupPlugin(ctx) {
   const sessions = new Map();
+  const knownParents = new Map();
   let rootSessionId = null;
   let heartbeatTimer = null;
 
@@ -410,6 +411,9 @@ function setupPlugin(ctx) {
     if (!foundId) return;
 
     let explicitParentId = findParentId(event, session);
+    if (explicitParentId) {
+      knownParents.set(foundId, explicitParentId);
+    }
 
     if (!rootSessionId) {
       if (!explicitParentId) {
@@ -417,11 +421,10 @@ function setupPlugin(ctx) {
       }
     }
 
-    let effectiveParentId = explicitParentId;
-    if (effectiveParentId === foundId) effectiveParentId = null;
-
-    if (!effectiveParentId && rootSessionId && foundId !== rootSessionId) {
-      effectiveParentId = rootSessionId;
+    let effectiveParentId = explicitParentId || knownParents.get(foundId) || null;
+    if (effectiveParentId === foundId) {
+      knownParents.delete(foundId);
+      effectiveParentId = null;
     }
 
     const rawTitle = findRawSessionTitle(event, session);
@@ -532,6 +535,7 @@ function setupPlugin(ctx) {
     await sendReportForSession(s, now);
 
     if (status === 'closed') {
+      knownParents.delete(foundId);
       sessions.delete(foundId);
       return;
     }
