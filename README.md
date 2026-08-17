@@ -76,6 +76,23 @@ Status colors:
 
 > TUI plugins need `@opentui/solid` and `solid-js` in your config folder's `package.json`. opencode installs these automatically on startup.
 
+### Removing built-in sidebar blocks
+
+The opencode TUI ships with built-in sidebar blocks (e.g. the `Context` block showing tokens, % used and $ spent). They are internal plugins and can be disabled per plugin id via `plugin_enabled` in `~/.config/opencode/tui.json`:
+
+```json
+{
+  "plugin_enabled": {
+    "internal:sidebar-context": false
+  },
+  "plugin": [
+    "./plugins/terminal-dashboard-sidebar.tsx"
+  ]
+}
+```
+
+Restart opencode afterwards. Other built-in sidebar blocks follow the same pattern (`internal:sidebar-files`, `internal:sidebar-todo`, `internal:sidebar-lsp`, `internal:sidebar-mcp`, `internal:sidebar-footer`).
+
 The server is started automatically by the first opencode terminal and stopped 30 seconds after the last terminal closes. No manual setup required.
 
 > Optional: run the server standalone with `node opencode-terminals-dashboard.mjs` (the plugin then leases to the existing server instead of spawning a new one).
