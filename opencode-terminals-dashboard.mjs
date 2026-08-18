@@ -178,6 +178,12 @@ function findActiveSubAgent(sessionId, sessionMap) {
   return best;
 }
 
+function isInterruptedError(value) {
+  if (!value) return false;
+  const text = String(value).toLowerCase();
+  return text.includes('abort') || text.includes('cancel') || text.includes('interrupt');
+}
+
 function findAgentName(event, session) {
   if (event?.properties) {
     if (typeof event.properties.agent === 'string' && event.properties.agent) return event.properties.agent;
@@ -528,7 +534,7 @@ function setupPlugin(ctx) {
       if (s) s.waitingForUser = false;
       if (s) s.error = null;
     } else if (coreStatus === 'idle' || type === 'session.idle' || type === 'idle') {
-      status = 'waiting';
+      status = (s && (s.status === 'interrupted' || isInterruptedError(s.error))) ? 'interrupted' : 'waiting';
       if (s) s.waitingForUser = false;
     } else if (type.includes('error') || type.includes('fail') || type.includes('exception')) {
       status = 'failed';
@@ -802,10 +808,11 @@ function startServer() {
 
   function buildCardData(id, s, now) {
     const displayStatus = s.status === 'user_response' && s.alarmEligible !== true ? 'waiting' : s.status;
-    const isWaitingState = displayStatus === 'waiting' || displayStatus === 'user_response' || displayStatus === 'asking_parent' || displayStatus === 'interrupted';
+    const visibleStatus = displayStatus === 'waiting' && isInterruptedError(s.error) ? 'interrupted' : displayStatus;
+    const isWaitingState = visibleStatus === 'waiting' || visibleStatus === 'user_response' || visibleStatus === 'asking_parent' || visibleStatus === 'interrupted';
     const waitingTimeMs = isWaitingState ? (now - s.statusChangedAt) : 0;
     const endTime = s.closedAt ? s.closedAt : now;
-    const runtimeMs = displayStatus === 'running'
+    const runtimeMs = visibleStatus === 'running'
       ? Math.max(0, endTime - (s.runningSince || s.statusChangedAt || s.startTime))
       : Math.max(0, s.lastRuntimeMs || 0);
     const uptimeMs = Math.max(0, endTime - s.startTime);
@@ -816,7 +823,7 @@ function startServer() {
       agent: s.agent || 'Build',
       model: s.model || 'Claude Haiku 4.5',
       parentId: s.parentId,
-      status: parseStatusInfo(displayStatus),
+      status: parseStatusInfo(visibleStatus),
       alarmEligible: s.alarmEligible === true,
       startTime: s.startTime,
       totalUptime: formatCompactDuration(uptimeMs),
@@ -1455,11 +1462,13 @@ function startServer() {
             }
 
             const incomingStatus = data.status === 'user_response' && data.alarmEligible !== true ? 'waiting' : data.status;
+            const incomingError = Object.prototype.hasOwnProperty.call(data, 'error') ? data.error : (current ? current.error : undefined);
+            const normalizedStatus = incomingStatus === 'waiting' && isInterruptedError(incomingError) ? 'interrupted' : incomingStatus;
             const prevStatus = current ? current.status : null;
-            const isStatusChanged = prevStatus !== incomingStatus;
+            const isStatusChanged = prevStatus !== normalizedStatus;
             const statusChangedAt = isStatusChanged ? now : (current ? current.statusChangedAt : now);
             const runningSince = (() => {
-              if (incomingStatus === 'running') {
+              if (normalizedStatus === 'running') {
                 if (prevStatus === 'running' && current && current.runningSince) return current.runningSince;
                 return now;
               }
@@ -1467,7 +1476,7 @@ function startServer() {
             })();
             const lastRuntimeMs = (() => {
               if (!current) return 0;
-              if (prevStatus === 'running' && incomingStatus !== 'running') {
+              if (prevStatus === 'running' && normalizedStatus !== 'running') {
                 const startedAt = current.runningSince || current.statusChangedAt || current.startTime || now;
                 return Math.max(0, now - startedAt);
               }
@@ -1511,8 +1520,8 @@ function startServer() {
               agent: data.agent || (current ? current.agent : 'Build'),
               model: data.model || (current ? current.model : 'Claude Haiku 4.5'),
               parentId: validParentId,
-              status: incomingStatus,
-              alarmEligible: incomingStatus === 'user_response' && data.alarmEligible === true,
+              status: normalizedStatus,
+              alarmEligible: normalizedStatus === 'user_response' && data.alarmEligible === true,
               startTime: current ? current.startTime : now,
               statusChangedAt: statusChangedAt,
               closedAt: null,
@@ -1526,7 +1535,7 @@ function startServer() {
               tokens: tokenState.tokens,
               rawTokens: tokenState.rawTokens,
               baseTokens: tokenState.baseTokens,
-              error: data.error || (current ? current.error : undefined),
+              error: incomingError,
               retryInfo: data.retryInfo || (current ? current.retryInfo : undefined),
               msgCount: (typeof data.msgCount === 'number') ? data.msgCount : (current ? current.msgCount : 0),
               compactionCount: (typeof data.compactionCount === 'number') ? data.compactionCount : (current ? current.compactionCount : 0),

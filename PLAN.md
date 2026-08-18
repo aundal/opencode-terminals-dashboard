@@ -16,5 +16,6 @@
 - Parent cards stay Running while direct sub-agents are Running or ASKING PARENT.
 - ASKING PARENT is yellow and does not trigger the user-response alarm.
 - User-response alarms require alarmEligible=true from a verified parent prompt; guessed/legacy user_response heartbeats are displayed as Waiting (Idle).
+- Aborted/cancelled/interrupted sessions stay Waiting (Interrupted) until real new work starts.
 - Extended parent metrics show total usage with direct sub-agent contribution in parentheses.
 - Resumed sessions show usage observed after the plugin sees the session, not old persisted OpenCode totals.
