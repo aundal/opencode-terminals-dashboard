@@ -1409,8 +1409,8 @@ function startServer() {
   <style>
     body { background-color: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 24px; }
     h1 { margin-top: 0; font-size: 1.5rem; color: #94a3b8; margin-bottom: 20px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 20px; }
-    .card { background: #1e293b; border-radius: 8px; border-left: 6px solid #64748b; padding: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3); display: flex; flex-direction: column; transition: all 0.3s ease; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, 360px); gap: 20px; align-items: start; }
+    .card { width: 360px; box-sizing: border-box; background: #1e293b; border-radius: 8px; border-left: 6px solid #64748b; padding: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3); display: flex; flex-direction: column; transition: all 0.3s ease; }
     .card.status-white { border-left-color: #f3f4f6; }
     .card.status-green { border-left-color: #22c55e; }
     .card.status-red { border-left-color: #ef4444; }
@@ -1578,6 +1578,10 @@ function startServer() {
     .offline-box { background: #1e293b; padding: 24px; border-radius: 8px; text-align: center; width: 100%; grid-column: 1 / -1; }
     .offline-title { color: #f8fafc; font-weight: bold; font-size: 1.1rem; margin-bottom: 8px; }
     .offline-tip { color: #94a3b8; font-size: 0.9rem; }
+    @media (max-width: 430px) {
+      .grid { grid-template-columns: 1fr; }
+      .card { width: 100%; }
+    }
   </style>
 </head>
 <body>

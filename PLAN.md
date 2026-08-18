@@ -31,3 +31,4 @@
 - Group headers are displayed at the top of group boxes and can be clicked to fold/unfold groups.
 - Group headers show card counts. Label grouping hides duplicate label badges inside cards.
 - Cards with in_progress todos are displayed as Running unless closed or interrupted.
+- Dashboard cards are fixed at 360px wide on desktop and full width on narrow screens.
