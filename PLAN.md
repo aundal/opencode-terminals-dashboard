@@ -29,3 +29,4 @@
 - The right-click label menu can reuse existing labels and their colors.
 - Gear menu includes Auto Folding toggles for TODO and AGENTS accordions.
 - Group headers are displayed at the top of group boxes and can be clicked to fold/unfold groups.
+- Group headers show card counts. Label grouping hides duplicate label badges inside cards.

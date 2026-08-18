@@ -1154,13 +1154,14 @@ function startServer() {
       window.lastStatuses = now;
     }
 
-    function renderSubAgent(sub, mode) {
+    function renderSubAgent(sub, mode, grouping) {
       var extended = mode === 'extended';
       var compact = mode === 'compact';
       var badgeTitle = statusTitle(sub);
+      var showLabelBadge = grouping !== 'label';
       return '<div class="sub-card status-' + sub.status.color + '" data-session-id="' + sub.id + '">' +
         '<div class="card-header">' +
-          '<div class="sub-session-title">&#129302; ' + esc(sub.title) + labelBadge(sub.id) + '</div>' +
+          '<div class="sub-session-title">&#129302; ' + esc(sub.title) + (showLabelBadge ? labelBadge(sub.id) : '') + '</div>' +
           '<div class="subtitle-row">' +
             '<span class="sub-session-subtitle">' + esc(sub.agent) + ' (' + esc(sub.model) + ')</span>' +
             '<span class="badge badge-' + sub.status.color + '"' + (badgeTitle ? ' title="' + esc(badgeTitle) + '"' : '') + '>' + sub.status.label + '</span>' +
@@ -1173,12 +1174,13 @@ function startServer() {
       '</div>';
     }
 
-    function cardHTML(c, mode) {
+    function cardHTML(c, mode, grouping) {
       var compact = mode === 'compact';
       var autoFoldAgents = localStorage.getItem('dashboardAutoFoldAgents') !== 'no';
       var isOpen = autoFoldAgents ? window.openStates[c.id] === true : true;
       var openAttr = isOpen ? ' open' : '';
       var badgeTitle = statusTitle(c);
+      var showLabelBadge = grouping !== 'label';
 
       var subAgentsHTML = (c.subAgents && c.subAgents.length > 0)
         ? '<div class="sub-agents-container">' +
@@ -1187,7 +1189,7 @@ function startServer() {
                 '<span class="chevron">&#9654;</span> ACTIVE SUB-AGENTS (' + c.subAgents.length + '):' +
               '</summary>' +
               '<div class="sub-agents-list">' +
-                c.subAgents.map(function(sub) { return renderSubAgent(sub, mode); }).join('') +
+                c.subAgents.map(function(sub) { return renderSubAgent(sub, mode, grouping); }).join('') +
               '</div>' +
             '</details>' +
           '</div>'
@@ -1195,7 +1197,7 @@ function startServer() {
 
       return '<div class="card status-' + c.status.color + '" data-session-id="' + c.id + '">' +
         '<div class="card-header">' +
-          '<div class="session-title">' + esc(c.title) + labelBadge(c.id) + '</div>' +
+          '<div class="session-title">' + esc(c.title) + (showLabelBadge ? labelBadge(c.id) : '') + '</div>' +
           '<div class="subtitle-row">' +
             '<span class="session-subtitle">' + esc(c.agent) + ' (' + esc(c.model) + ')</span>' +
             '<span class="badge badge-' + c.status.color + '"' + (badgeTitle ? ' title="' + esc(badgeTitle) + '"' : '') + '>' + c.status.label + '</span>' +
@@ -1235,12 +1237,12 @@ function startServer() {
     }
 
     function groupedHTML(cards, mode, grouping) {
-      if (grouping === 'none') return cards.map(function(c) { return cardHTML(c, mode); }).join('');
+      if (grouping === 'none') return cards.map(function(c) { return cardHTML(c, mode, grouping); }).join('');
 
       var groups = [];
       if (grouping === 'label') {
         var hasLabels = cards.some(function(c) { return !!getLabel(c.id); });
-        if (!hasLabels) return cards.map(function(c) { return cardHTML(c, mode); }).join('');
+        if (!hasLabels) return cards.map(function(c) { return cardHTML(c, mode, 'none'); }).join('');
         var labelMap = {};
         cards.forEach(function(c) {
           var key = getLabel(c.id) || 'Unlabeled';
@@ -1264,10 +1266,10 @@ function startServer() {
         var isOpen = window.openStates[groupKey] !== false;
         return '<section class="group-box group-' + esc(group.color) + '">' +
           '<button type="button" class="group-header' + (group.labelGroup ? ' label-group' : '') + '" data-group-key="' + esc(groupKey) + '">' +
-            '<span class="chevron">' + (isOpen ? '&#9660;' : '&#9654;') + '</span> ' + esc(group.label) +
+            '<span class="chevron">' + (isOpen ? '&#9660;' : '&#9654;') + '</span> ' + esc(group.label) + ' (' + group.cards.length + ')' +
           '</button>' +
           '<div class="group-body' + (isOpen ? '' : ' collapsed') + '">' +
-            '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode); }).join('') + '</div>' +
+            '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode, grouping); }).join('') + '</div>' +
           '</div>' +
         '</section>';
       }).join('');
