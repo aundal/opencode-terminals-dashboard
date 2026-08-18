@@ -19,4 +19,5 @@
 - Aborted/cancelled/interrupted sessions stay Waiting (Interrupted) until real new work starts.
 - Extended parent cost/tokens include direct sub-agent usage without parentheses.
 - Extended parent messages always show total plus direct sub-agent contribution in parentheses.
+- Running sessions decay to Waiting (Idle) after 30 seconds without activity.
 - Resumed sessions show usage observed after the plugin sees the session, not old persisted OpenCode totals.
