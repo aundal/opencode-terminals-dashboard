@@ -1149,6 +1149,16 @@ function startServer() {
       return 'Unknown';
     }
 
+    function groupColor(label, cards) {
+      if (label === 'Error') return 'red';
+      if (label === 'User Request') return 'yellow';
+      if (label === 'Running') return 'green';
+      if (label === 'Waiting') return 'white';
+      if (label === 'Closed') return 'gray';
+      if (label === 'Unknown' || label === 'Unlabeled') return 'white';
+      return cards && cards[0] && cards[0].status && cards[0].status.color ? cards[0].status.color : 'white';
+    }
+
     function groupedHTML(cards, mode, grouping) {
       if (grouping === 'none') return cards.map(function(c) { return cardHTML(c, mode); }).join('');
 
@@ -1166,16 +1176,16 @@ function startServer() {
           if (a === 'Unlabeled') return 1;
           if (b === 'Unlabeled') return -1;
           return a.localeCompare(b);
-        }).forEach(function(label) { groups.push({ label: label, cards: labelMap[label] }); });
+        }).forEach(function(label) { groups.push({ label: label, color: groupColor(label, labelMap[label]), cards: labelMap[label] }); });
       } else if (grouping === 'status') {
         ['Error', 'User Request', 'Running', 'Waiting', 'Closed', 'Unknown'].forEach(function(label) {
           var items = cards.filter(function(c) { return statusGroup(c) === label; });
-          if (items.length) groups.push({ label: label, cards: items });
+          if (items.length) groups.push({ label: label, color: groupColor(label, items), cards: items });
         });
       }
 
       return groups.map(function(group) {
-        return '<section class="group-box">' +
+        return '<section class="group-box group-' + esc(group.color) + '">' +
           '<div class="group-label">' + esc(group.label) + '</div>' +
           '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode); }).join('') + '</div>' +
         '</section>';
@@ -1345,8 +1355,22 @@ function startServer() {
     .settings-option.active, .settings-toggle.active { background: #38bdf8; border-color: #38bdf8; color: #082f49; font-weight: 700; }
     .settings-row-label { color: #cbd5e1; font-size: 0.82rem; }
     .grouped-grid { display: flex; flex-direction: column; gap: 18px; }
-    .group-box { position: relative; border: 1px solid #334155; border-left: 4px solid #7dd3fc; border-radius: 10px; padding: 16px 16px 16px 24px; background: rgba(15, 23, 42, 0.45); }
-    .group-label { position: absolute; left: -1px; top: 14px; transform: translateX(-50%) rotate(-90deg); transform-origin: center; background: #0f172a; color: #7dd3fc; border: 1px solid #334155; border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+    .group-box { position: relative; border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 16px 16px 16px 24px; background: #172033; }
+    .group-label { position: absolute; left: -1px; top: 14px; transform: translateX(-50%) rotate(-90deg); transform-origin: center; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+    .group-white { border-left-color: #f3f4f6; }
+    .group-white .group-label { background: #f3f4f6; color: #0f172a; }
+    .group-green { border-left-color: #22c55e; }
+    .group-green .group-label { background: #22c55e; color: #052e16; }
+    .group-red { border-left-color: #ef4444; }
+    .group-red .group-label { background: #ef4444; color: #450a0a; }
+    .group-yellow { border-left-color: #eab308; }
+    .group-yellow .group-label { background: #eab308; color: #422006; }
+    .group-orange { border-left-color: #f97316; }
+    .group-orange .group-label { background: #f97316; color: #431407; }
+    .group-skyblue { border-left-color: #38bdf8; }
+    .group-skyblue .group-label { background: #38bdf8; color: #082f49; }
+    .group-gray { border-left-color: #64748b; }
+    .group-gray .group-label { background: #64748b; color: #f8fafc; }
     .group-cards { margin-left: 8px; }
 
     .card-footer { margin-top: auto; padding-top: 10px; font-size: 0.7rem; color: #64748b; border-top: 1px solid #334155; }
