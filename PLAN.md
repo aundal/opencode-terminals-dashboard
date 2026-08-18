@@ -26,7 +26,7 @@
 - Group boxes use a lighter background than the page and reuse status colors for group labels.
 - Top-level sessions do not decay from Running to Waiting; only explicit OpenCode idle events can do that.
 - Label colors are stored as label objects only: { text, color }.
-- The right-click label menu can reuse existing labels and their colors.
+- The right-click label menu has a Labels submenu that can reuse existing labels and their colors.
 - Gear menu includes Auto Folding toggles for TODO and AGENTS accordions.
 - Group headers are displayed at the top of group boxes and can be clicked to fold/unfold groups.
 - Group headers show card counts. Label grouping hides duplicate label badges inside cards.

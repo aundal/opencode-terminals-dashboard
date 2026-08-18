@@ -970,6 +970,29 @@ function startServer() {
       try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e) {}
     }
 
+    function addExistingLabelsSubmenu(menu, id, labels) {
+      if (!labels.length) return;
+      var wrap = document.createElement('div');
+      wrap.className = 'context-submenu-wrap';
+      var trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'context-submenu-trigger';
+      trigger.textContent = 'Labels';
+      var submenu = document.createElement('div');
+      submenu.className = 'context-submenu';
+      labels.forEach(function(data) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'label-pick label-' + data.color;
+        btn.textContent = data.text;
+        btn.onclick = function(e) { e.stopPropagation(); setExistingLabel(id, data); refresh(); closeMenu(); };
+        submenu.appendChild(btn);
+      });
+      wrap.appendChild(trigger);
+      wrap.appendChild(submenu);
+      menu.appendChild(wrap);
+    }
+
     function labelBadge(id) {
       var l = getLabel(id);
       return l ? '<span class="session-label label-' + esc(getLabelColor(id)) + '">' + esc(l) + '</span>' : '';
@@ -995,20 +1018,7 @@ function startServer() {
       clearBtn.onclick = function() { setLabel(id, null); refresh(); closeMenu(); };
       menu.appendChild(setBtn);
       var labels = existingLabels();
-      if (labels.length > 0) {
-        var labelsTitle = document.createElement('div');
-        labelsTitle.className = 'context-menu-title';
-        labelsTitle.textContent = 'Labels';
-        menu.appendChild(labelsTitle);
-        labels.forEach(function(data) {
-          var btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'label-pick label-' + data.color;
-          btn.textContent = data.text;
-          btn.onclick = function() { setExistingLabel(id, data); refresh(); closeMenu(); };
-          menu.appendChild(btn);
-        });
-      }
+      addExistingLabelsSubmenu(menu, id, labels);
       if (getLabel(id)) {
         var colorTitle = document.createElement('div');
         colorTitle.className = 'context-menu-title';
@@ -1444,6 +1454,10 @@ function startServer() {
     .context-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: #f8fafc; padding: 6px 10px; font-size: 0.8rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; border-radius: 4px; }
     .context-menu button:hover { background: #334155; }
     .context-menu-title { color: #94a3b8; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 8px 3px; }
+    .context-submenu-wrap { position: relative; }
+    .context-submenu-trigger::after { content: '›'; float: right; }
+    .context-submenu { display: none; position: absolute; left: 100%; top: 0; min-width: 150px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4); padding: 4px; }
+    .context-submenu-wrap:hover .context-submenu { display: block; }
     .label-color-grid { display: grid; grid-template-columns: repeat(5, 20px); gap: 5px; padding: 4px 8px 8px; }
     .context-menu .label-color-choice { width: 20px; height: 20px; padding: 0; border: 1px solid #0f172a; border-radius: 50%; }
     .context-menu .label-color-choice:hover { outline: 2px solid #f8fafc; background: inherit; }
