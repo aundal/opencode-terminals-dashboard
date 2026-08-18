@@ -6,7 +6,7 @@ const PLUGIN_ID = "terminal-dashboard-sidebar";
 const DASHBOARD_URL = "http://127.0.0.1:31337/api/data";
 const REFRESH_MS = 2000;
 const EXPANDED_KV_KEY = "terminal_dashboard_expanded";
-const TITLE_MAX = 35;
+const TITLE_MAX = 30;
 
 function clipTitle(value: string) {
   const s = String(value || "");
