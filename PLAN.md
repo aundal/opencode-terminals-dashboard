@@ -24,3 +24,5 @@
 - Dashboard settings live in a gear menu beside search: view mode, grouping and alarm toggles.
 - Grouping supports None, Label and Status. Status order is Error, User Request, Running, Waiting, Closed, Unknown.
 - Group boxes use a lighter background than the page and reuse status colors for group labels.
+- Top-level sessions do not decay from Running to Waiting; only explicit OpenCode idle events can do that.
+- Label colors are stored per label with backwards compatibility for older string labels.

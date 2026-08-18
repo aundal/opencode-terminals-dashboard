@@ -435,8 +435,8 @@ function setupPlugin(ctx) {
     for (const [id, s] of sessions.entries()) {
       const inactiveMs = now - s.lastActivityTime;
 
-      // Inactivity Decay: If session was marked 'running', but no events arrived for 12s, decay to 'waiting'
-      if (s.status === 'running' && inactiveMs > RUNNING_DECAY_MS) {
+      // Quiet sub-agents can decay; top-level sessions should trust explicit OpenCode idle events.
+      if (s.parentId && s.status === 'running' && inactiveMs > RUNNING_DECAY_MS) {
         s.status = s.waitingForUser ? 'user_response' : 'waiting';
       }
 
@@ -922,15 +922,35 @@ function startServer() {
     window.dashboardLabels = {};
     try { window.dashboardLabels = JSON.parse(localStorage.getItem('dashboardLabels') || '{}'); } catch(e) {}
 
-    function getLabel(id) { return window.dashboardLabels[id] || null; }
+    var labelColors = ['blue', 'green', 'red', 'yellow', 'orange', 'purple', 'pink', 'cyan', 'gray', 'white'];
+    function labelData(id) {
+      var value = window.dashboardLabels[id];
+      if (!value) return null;
+      if (typeof value === 'string') return { text: value, color: null };
+      return { text: value.text || '', color: value.color || 'blue' };
+    }
+    function getLabel(id) {
+      var data = labelData(id);
+      return data && data.text ? data.text : null;
+    }
+    function getLabelColor(id) {
+      var data = labelData(id);
+      return data && data.color ? data.color : 'blue';
+    }
     function setLabel(id, label) {
-      if (label) window.dashboardLabels[id] = label; else delete window.dashboardLabels[id];
+      if (label) window.dashboardLabels[id] = { text: label, color: getLabelColor(id) }; else delete window.dashboardLabels[id];
+      try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e) {}
+    }
+    function setLabelColor(id, color) {
+      var text = getLabel(id);
+      if (!text || labelColors.indexOf(color) === -1) return;
+      window.dashboardLabels[id] = { text: text, color: color };
       try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e) {}
     }
 
     function labelBadge(id) {
       var l = getLabel(id);
-      return l ? '<span class="session-label">' + esc(l) + '</span>' : '';
+      return l ? '<span class="session-label label-' + esc(getLabelColor(id)) + '">' + esc(l) + '</span>' : '';
     }
 
     function closeMenu() {
@@ -952,6 +972,23 @@ function startServer() {
       clearBtn.textContent = 'Remove label';
       clearBtn.onclick = function() { setLabel(id, null); refresh(); closeMenu(); };
       menu.appendChild(setBtn);
+      if (getLabel(id)) {
+        var colorTitle = document.createElement('div');
+        colorTitle.className = 'context-menu-title';
+        colorTitle.textContent = 'Set label color';
+        menu.appendChild(colorTitle);
+        var colorGrid = document.createElement('div');
+        colorGrid.className = 'label-color-grid';
+        labelColors.forEach(function(color) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'label-color-choice label-' + color;
+          btn.title = color.charAt(0).toUpperCase() + color.slice(1);
+          btn.onclick = function(e) { e.stopPropagation(); setLabelColor(id, color); refresh(); };
+          colorGrid.appendChild(btn);
+        });
+        menu.appendChild(colorGrid);
+      }
       menu.appendChild(clearBtn);
       menu.style.left = x + 'px';
       menu.style.top = y + 'px';
@@ -1156,6 +1193,10 @@ function startServer() {
       if (label === 'Waiting') return 'white';
       if (label === 'Closed') return 'gray';
       if (label === 'Unknown' || label === 'Unlabeled') return 'white';
+      for (var i = 0; cards && i < cards.length; i++) {
+        var data = labelData(cards[i].id);
+        if (data && data.text === label && data.color) return data.color;
+      }
       return cards && cards[0] && cards[0].status && cards[0].status.color ? cards[0].status.color : 'white';
     }
 
@@ -1176,7 +1217,7 @@ function startServer() {
           if (a === 'Unlabeled') return 1;
           if (b === 'Unlabeled') return -1;
           return a.localeCompare(b);
-        }).forEach(function(label) { groups.push({ label: label, color: groupColor(label, labelMap[label]), cards: labelMap[label] }); });
+        }).forEach(function(label) { groups.push({ label: label, labelGroup: true, color: groupColor(label, labelMap[label]), cards: labelMap[label] }); });
       } else if (grouping === 'status') {
         ['Error', 'User Request', 'Running', 'Waiting', 'Closed', 'Unknown'].forEach(function(label) {
           var items = cards.filter(function(c) { return statusGroup(c) === label; });
@@ -1186,7 +1227,7 @@ function startServer() {
 
       return groups.map(function(group) {
         return '<section class="group-box group-' + esc(group.color) + '">' +
-          '<div class="group-label">' + esc(group.label) + '</div>' +
+          '<div class="group-label' + (group.labelGroup ? ' label-group' : '') + '">' + esc(group.label) + '</div>' +
           '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode); }).join('') + '</div>' +
         '</section>';
       }).join('');
@@ -1276,11 +1317,16 @@ function startServer() {
       var settingsMenu = document.getElementById('settingsMenu');
       var settingsWrap = document.getElementById('settingsWrap');
       var settingsButton = document.getElementById('settingsButton');
-      function openSettings() { settingsMenu.classList.add('open'); }
+      var settingsCloseTimer = null;
+      function openSettings() {
+        if (settingsCloseTimer) clearTimeout(settingsCloseTimer);
+        settingsMenu.classList.add('open');
+      }
       function closeSettings() { settingsMenu.classList.remove('open'); }
+      function scheduleCloseSettings() { settingsCloseTimer = setTimeout(closeSettings, 100); }
       settingsButton.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); openSettings(); });
       settingsWrap.addEventListener('mouseenter', openSettings);
-      settingsWrap.addEventListener('mouseleave', closeSettings);
+      settingsWrap.addEventListener('mouseleave', scheduleCloseSettings);
       updateMenuState();
       document.getElementById('filterInput').addEventListener('input', refresh);
     }
@@ -1330,9 +1376,23 @@ function startServer() {
     .time-compact .cold-cache { color: #7dd3fc; font-size: 0.9rem; vertical-align: middle; }
     .time-compact > div + div { margin-top: 2px; }
     .session-label { display: inline-block; margin-left: 8px; font-size: 0.7rem; font-weight: 600; color: #0f172a; background: #7dd3fc; border-radius: 4px; padding: 1px 6px; vertical-align: middle; }
+    .label-blue { background: #38bdf8 !important; color: #082f49 !important; }
+    .label-green { background: #22c55e !important; color: #052e16 !important; }
+    .label-red { background: #ef4444 !important; color: #450a0a !important; }
+    .label-yellow { background: #eab308 !important; color: #422006 !important; }
+    .label-orange { background: #f97316 !important; color: #431407 !important; }
+    .label-purple { background: #a855f7 !important; color: #2e1065 !important; }
+    .label-pink { background: #ec4899 !important; color: #500724 !important; }
+    .label-cyan { background: #06b6d4 !important; color: #083344 !important; }
+    .label-gray { background: #64748b !important; color: #f8fafc !important; }
+    .label-white { background: #f3f4f6 !important; color: #0f172a !important; }
     .context-menu { position: fixed; background: #1e293b; border: 1px solid #334155; border-radius: 6px; box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4); padding: 4px; z-index: 1000; min-width: 140px; }
     .context-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: #f8fafc; padding: 6px 10px; font-size: 0.8rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; border-radius: 4px; }
     .context-menu button:hover { background: #334155; }
+    .context-menu-title { color: #94a3b8; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 8px 3px; }
+    .label-color-grid { display: grid; grid-template-columns: repeat(5, 20px); gap: 5px; padding: 4px 8px 8px; }
+    .context-menu .label-color-choice { width: 20px; height: 20px; padding: 0; border: 1px solid #0f172a; border-radius: 50%; }
+    .context-menu .label-color-choice:hover { outline: 2px solid #f8fafc; background: inherit; }
 
     .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; flex-wrap: nowrap; position: relative; }
     .controls input {
@@ -1357,6 +1417,7 @@ function startServer() {
     .grouped-grid { display: flex; flex-direction: column; gap: 18px; }
     .group-box { position: relative; border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 16px 16px 16px 24px; background: #172033; }
     .group-label { position: absolute; left: -1px; top: 14px; transform: translateX(-50%) rotate(-90deg); transform-origin: center; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+    .group-label.label-group { font-size: calc(0.72rem + 2px); }
     .group-white { border-left-color: #f3f4f6; }
     .group-white .group-label { background: #f3f4f6; color: #0f172a; }
     .group-green { border-left-color: #22c55e; }
@@ -1371,6 +1432,14 @@ function startServer() {
     .group-skyblue .group-label { background: #38bdf8; color: #082f49; }
     .group-gray { border-left-color: #64748b; }
     .group-gray .group-label { background: #64748b; color: #f8fafc; }
+    .group-blue { border-left-color: #38bdf8; }
+    .group-blue .group-label { background: #38bdf8; color: #082f49; }
+    .group-purple { border-left-color: #a855f7; }
+    .group-purple .group-label { background: #a855f7; color: #2e1065; }
+    .group-pink { border-left-color: #ec4899; }
+    .group-pink .group-label { background: #ec4899; color: #500724; }
+    .group-cyan { border-left-color: #06b6d4; }
+    .group-cyan .group-label { background: #06b6d4; color: #083344; }
     .group-cards { margin-left: 8px; }
 
     .card-footer { margin-top: auto; padding-top: 10px; font-size: 0.7rem; color: #64748b; border-top: 1px solid #334155; }
