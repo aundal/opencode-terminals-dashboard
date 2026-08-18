@@ -28,6 +28,7 @@
 - Top-level sessions do not decay from Running to Waiting; only explicit OpenCode idle events can do that.
 - Label colors are stored as label objects only: { text, color }.
 - The right-click label menu has a Labels submenu that can reuse existing labels and their colors.
+- Each label in the Labels submenu has a remove (x) button that deletes the label from all sessions.
 - Gear menu includes Auto Folding toggles for TODO and AGENTS accordions.
 - Group headers are displayed at the top of group boxes and can be clicked to fold/unfold groups.
 - Group headers show card counts. Label grouping hides duplicate label badges inside cards.

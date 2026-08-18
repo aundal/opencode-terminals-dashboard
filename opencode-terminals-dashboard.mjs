@@ -1133,13 +1133,32 @@ function startServer() {
       trigger.textContent = 'Labels';
       var submenu = document.createElement('div');
       submenu.className = 'context-submenu';
-      labels.forEach(function(data) {
+labels.forEach(function(data) {
+        var row = document.createElement('div');
+        row.className = 'label-pick-row';
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'label-pick label-' + data.color;
         btn.textContent = data.text;
         btn.onclick = function(e) { e.stopPropagation(); setExistingLabel(id, data); refresh(); closeMenu(); };
-        submenu.appendChild(btn);
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'label-pick-remove';
+        del.textContent = '\u00d7';
+        del.title = 'Remove this label from all sessions';
+        del.onclick = function(e) {
+          e.stopPropagation();
+          Object.keys(window.dashboardLabels).forEach(function(sid) {
+            var d = labelData(sid);
+            if (d && d.text === data.text) delete window.dashboardLabels[sid];
+          });
+          try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e2) {}
+          refresh();
+          closeMenu();
+        };
+        row.appendChild(btn);
+        row.appendChild(del);
+        submenu.appendChild(row);
       });
       wrap.appendChild(trigger);
       wrap.appendChild(submenu);
@@ -1622,6 +1641,10 @@ function startServer() {
     .context-submenu-trigger::after { content: '›'; float: right; }
     .context-submenu { display: none; position: absolute; left: 100%; top: 0; min-width: 150px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4); padding: 4px; }
     .context-submenu-wrap:hover .context-submenu { display: block; }
+    .label-pick-row { display: flex; align-items: center; gap: 4px; }
+    .label-pick-row .label-pick { flex: 1; }
+    .label-pick-remove { flex: 0 0 20px; width: 20px; text-align: center; color: #94a3b8; }
+    .label-pick-remove:hover { color: #ef4444; }
     .label-color-grid { display: grid; grid-template-columns: repeat(5, 20px); gap: 5px; padding: 4px 8px 8px; }
     .context-menu .label-color-choice { width: 20px; height: 20px; padding: 0; border: 1px solid #0f172a; border-radius: 50%; }
     .context-menu .label-color-choice:hover { outline: 2px solid #f8fafc; background: inherit; }
