@@ -1462,8 +1462,8 @@ function startServer() {
     .settings-option.active, .settings-toggle.active { background: #38bdf8; border-color: #38bdf8; color: #082f49; font-weight: 700; }
     .settings-row-label { color: #cbd5e1; font-size: 0.82rem; }
     .grouped-grid { display: flex; flex-direction: column; gap: 18px; }
-    .group-box { border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 12px 16px 16px; background: #172033; }
-    .group-header { display: inline-flex; align-items: center; gap: 6px; margin-top: -14px; margin-bottom: 12px; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
+    .group-box { position: relative; border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 22px 16px 16px; background: #172033; }
+    .group-header { position: absolute; top: -14px; left: 16px; display: inline-flex; align-items: center; gap: 6px; margin: 0; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
     .group-header.label-group { font-size: calc(0.72rem + 2px); }
     .group-body.collapsed { display: none; }
     .group-white { border-left-color: #f3f4f6; }
