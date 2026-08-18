@@ -14,8 +14,8 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Sub-agent parent handoff** — sub-agents can show ASKING PARENT without triggering the user-response alarm; alarms only fire for verified parent prompts
 - **Error tooltips** — hover a failed card to see the error message (`session.error` events)
 - **Retry tooltips** — hover the Retrying badge for attempt count and reason (`retry` status, `RetryPart`)
-- **Cost & tokens** — live usage observed since the dashboard saw the session; parent cards include sub-agent usage in parentheses (extended mode)
-- **Msg/Compaction counters** — message and compaction counts per session; parent cards include sub-agent messages in parentheses
+- **Cost & tokens** — live usage observed since the dashboard saw the session; parent totals include sub-agent usage (extended mode)
+- **Msg/Compaction counters** — message and compaction counts per session; parent message counts always show sub-agent messages in parentheses
 - **Todos** — collapsible TODOS accordion with per-item status icons (pending / in_progress / completed / cancelled)
 - **Filter** — filter cards by title, agent or status
 - **Info modes** — *Standard* (clean) vs *Udvidet* (cost, tokens, msgs, compactions)
