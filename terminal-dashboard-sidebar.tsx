@@ -18,6 +18,7 @@ function statusColor(theme: any, type: string) {
   switch (type) {
     case "running": return theme.success;
     case "user_response": return theme.warning;
+    case "asking_parent": return theme.warning;
     case "failed":
     case "interrupted": return theme.error;
     case "retrying": return "#f97316";

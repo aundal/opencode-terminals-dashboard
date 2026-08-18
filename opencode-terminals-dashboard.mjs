@@ -139,6 +139,45 @@ function preferSessionTokens(currentTokens, nextTokens) {
   return tokenTotal(nextTokens) >= tokenTotal(currentTokens) ? nextTokens : currentTokens;
 }
 
+function zeroTokensLike(tokens) {
+  const out = {};
+  if (!tokens || typeof tokens !== 'object') return out;
+  for (const key of Object.keys(tokens)) out[key] = 0;
+  return out;
+}
+
+function subtractTokens(totalTokens, baseTokens) {
+  if (!totalTokens || typeof totalTokens !== 'object') return undefined;
+  const out = {};
+  for (const key of Object.keys(totalTokens)) {
+    const total = typeof totalTokens[key] === 'number' && isFinite(totalTokens[key]) ? totalTokens[key] : 0;
+    const base = baseTokens && typeof baseTokens[key] === 'number' && isFinite(baseTokens[key]) ? baseTokens[key] : 0;
+    out[key] = Math.max(0, total - base);
+  }
+  return out;
+}
+
+function addTokens(a, b) {
+  const out = {};
+  for (const tokens of [a, b]) {
+    if (!tokens || typeof tokens !== 'object') continue;
+    for (const [key, value] of Object.entries(tokens)) {
+      if (typeof value === 'number' && isFinite(value)) out[key] = (out[key] || 0) + value;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function findActiveSubAgent(sessionId, sessionMap) {
+  let best = null;
+  for (const session of sessionMap.values()) {
+    if (session.parentId === sessionId && (session.status === 'running' || session.status === 'asking_parent')) {
+      if (!best || (session.lastActivityTime || 0) > (best.lastActivityTime || 0)) best = session;
+    }
+  }
+  return best;
+}
+
 function findAgentName(event, session) {
   if (event?.properties) {
     if (typeof event.properties.agent === 'string' && event.properties.agent) return event.properties.agent;
@@ -395,6 +434,7 @@ function setupPlugin(ctx) {
           msgCount: s.msgCount,
           compactionCount: s.compactionCount,
           todos: s.todos,
+          observedUsage: true,
           timestamp: now
         })
       });
@@ -424,7 +464,7 @@ function setupPlugin(ctx) {
       }
 
       // Quiet sub-agents should fade out of reporting instead of bouncing CLOSED -> RUNNING.
-      if (s.parentId && !s.waitingForUser && inactiveMs > STALE_SUBAGENT_PRUNE_MS) {
+      if (s.parentId && !s.waitingForUser && s.status !== 'asking_parent' && inactiveMs > STALE_SUBAGENT_PRUNE_MS) {
         sessions.delete(id);
         continue;
       }
@@ -444,8 +484,20 @@ function setupPlugin(ctx) {
 
     let foundId = findSessionId(event, session, ctx);
     
-    // Fallback to rootSessionId if event doesn't carry explicit session ID (e.g. question/permission events)
+    // Fallback to rootSessionId if event doesn't carry explicit session ID (e.g. question/permission events).
+    // If sub-agents are active, anonymous prompts belong to the parent/sub-agent handoff and should not alarm the user.
     if (!foundId && rootSessionId) {
+      if (isQuestionOrPermissionEvent(event)) {
+        const activeSubAgent = findActiveSubAgent(rootSessionId, sessions);
+        if (activeSubAgent) {
+          const now = Date.now();
+          activeSubAgent.status = 'asking_parent';
+          activeSubAgent.waitingForUser = false;
+          activeSubAgent.lastActivityTime = now;
+          await sendReportForSession(activeSubAgent, now, true);
+          return;
+        }
+      }
       foundId = rootSessionId;
     }
     if (!foundId) return;
@@ -466,6 +518,8 @@ function setupPlugin(ctx) {
       knownParents.delete(foundId);
       effectiveParentId = null;
     }
+
+    const isSubAgent = !!effectiveParentId;
 
     const rawTitle = findRawSessionTitle(event, session);
     const foundTitle = cleanTitle(rawTitle);
@@ -495,8 +549,8 @@ function setupPlugin(ctx) {
       status = 'retrying';
       if (s) s.waitingForUser = false;
     } else if (isUserPrompt || type.startsWith('permission') || type.startsWith('question')) {
-      status = 'user_response';
-      if (s) s.waitingForUser = true;
+      status = isSubAgent ? 'asking_parent' : 'user_response';
+      if (s) s.waitingForUser = !isSubAgent;
     } else if (coreStatus === 'busy' || type.includes('busy') || type.includes('tool') || type.includes('execut') || type.includes('running') || type.includes('delta')) {
       status = 'running';
       if (s) s.waitingForUser = false;
@@ -511,7 +565,6 @@ function setupPlugin(ctx) {
       status = 'user_response';
     }
 
-    const isSubAgent = !!effectiveParentId;
     const isSessionCreate = type === 'session.created' || type === 'session.create';
 
     if (isSessionCreate && !isSubAgent && activeTopLevelSessionId && activeTopLevelSessionId !== foundId) {
@@ -534,7 +587,11 @@ function setupPlugin(ctx) {
         agent: formatAgentName(foundAgent, isSubAgent),
         model: formatModelName(foundModel),
         status: status,
-        waitingForUser: isUserPrompt,
+        waitingForUser: isUserPrompt && !isSubAgent,
+        baseCost: isSessionCreate ? 0 : undefined,
+        baseTokens: undefined,
+        rawCost: undefined,
+        rawTokens: undefined,
         lastActivityTime: now
       };
       sessions.set(foundId, s);
@@ -555,9 +612,17 @@ function setupPlugin(ctx) {
     const info = props.info || {};
     const part = props.part || {};
 
-    // 1. Cost / tokens: use session totals from message.updated only.
-    if (typeof info.cost === 'number') s.cost = info.cost;
-    if (info.tokens && typeof info.tokens === 'object') s.tokens = preferSessionTokens(s.tokens, info.tokens);
+    // 1. Cost / tokens: show usage observed in this dashboard session, not persisted totals.
+    if (typeof info.cost === 'number') {
+      s.rawCost = typeof s.rawCost === 'number' ? Math.max(s.rawCost, info.cost) : info.cost;
+      if (typeof s.baseCost !== 'number') s.baseCost = isSessionCreate ? 0 : s.rawCost;
+      s.cost = Math.max(0, s.rawCost - s.baseCost);
+    }
+    if (info.tokens && typeof info.tokens === 'object') {
+      s.rawTokens = preferSessionTokens(s.rawTokens, info.tokens);
+      if (!s.baseTokens || typeof s.baseTokens !== 'object') s.baseTokens = isSessionCreate ? zeroTokensLike(s.rawTokens) : s.rawTokens;
+      s.tokens = subtractTokens(s.rawTokens, s.baseTokens);
+    }
 
     // 2. Error: from session.error / message error
     const err = props.error || info.error || {};
@@ -706,6 +771,7 @@ function startServer() {
     switch (statusStr) {
       case 'running': return { type: 'running', label: 'Running', color: 'green' };
       case 'user_response': return { type: 'user_response', label: 'Waiting for User Response', color: 'yellow' };
+      case 'asking_parent': return { type: 'asking_parent', label: 'ASKING PARENT', color: 'yellow' };
       case 'interrupted': return { type: 'interrupted', label: 'Waiting (Interrupted)', color: 'orange' };
       case 'retrying': return { type: 'retrying', label: 'Retrying', color: 'skyblue' };
       case 'failed': return { type: 'failed', label: 'Failed', color: 'red' };
@@ -753,8 +819,15 @@ function startServer() {
     return parts.length ? parts.join(' / ') : null;
   }
 
+  function applyFormattedMetrics(card) {
+    card.cost = formatCost(card.costValue);
+    card.tokens = formatTokens(card.tokensValue);
+    card.subAgentCost = card.subAgentCostValue > 0 ? formatCost(card.subAgentCostValue) : null;
+    card.subAgentTokens = tokenTotal(card.subAgentTokensValue) > 0 ? formatTokens(card.subAgentTokensValue) : null;
+  }
+
   function buildCardData(id, s, now) {
-    const isWaitingState = s.status === 'waiting' || s.status === 'user_response' || s.status === 'interrupted';
+    const isWaitingState = s.status === 'waiting' || s.status === 'user_response' || s.status === 'asking_parent' || s.status === 'interrupted';
     const waitingTimeMs = isWaitingState ? (now - s.statusChangedAt) : 0;
     const endTime = s.closedAt ? s.closedAt : now;
     const runtimeMs = s.status === 'running'
@@ -762,7 +835,7 @@ function startServer() {
       : Math.max(0, s.lastRuntimeMs || 0);
     const uptimeMs = Math.max(0, endTime - s.startTime);
 
-    return {
+    const card = {
       id: id,
       title: cleanTitle(s.title) || s.title,
       agent: s.agent || 'Build',
@@ -774,8 +847,15 @@ function startServer() {
       runtime: formatCompactDuration(runtimeMs),
       waitingTime: isWaitingState ? formatCompactDuration(waitingTimeMs) : null,
       isCacheCold: isWaitingState && waitingTimeMs >= COLD_CACHE_MS,
-      cost: formatCost(s.cost),
-      tokens: formatTokens(s.tokens),
+      costValue: (typeof s.cost === 'number' && isFinite(s.cost)) ? s.cost : undefined,
+      tokensValue: s.tokens,
+      subAgentCostValue: 0,
+      subAgentTokensValue: undefined,
+      subAgentMsgCount: 0,
+      cost: null,
+      tokens: null,
+      subAgentCost: null,
+      subAgentTokens: null,
       error: s.error || null,
       retryInfo: s.retryInfo || null,
       msgCount: s.msgCount || 0,
@@ -783,6 +863,8 @@ function startServer() {
       todos: Array.isArray(s.todos) ? s.todos : [],
       subAgents: []
     };
+    applyFormattedMetrics(card);
+    return card;
   }
 
   function getCards() {
@@ -804,12 +886,32 @@ function startServer() {
       }
     }
 
-    // Override parent card status to RUNNING if at least ONE sub-agent is running
+    // Parent cards include their direct sub-agent usage and stay running while sub-agents are active.
     for (const card of rootCards) {
       if (card.subAgents && card.subAgents.length > 0) {
-        const hasRunningSubAgent = card.subAgents.some(sub => sub.status.type === 'running');
-        if (hasRunningSubAgent && card.status.type !== 'closed') {
+        let subAgentCostValue = 0;
+        let subAgentTokensValue;
+        let subAgentMsgCount = 0;
+        for (const sub of card.subAgents) {
+          if (typeof sub.costValue === 'number' && isFinite(sub.costValue)) subAgentCostValue += sub.costValue;
+          subAgentTokensValue = addTokens(subAgentTokensValue, sub.tokensValue);
+          subAgentMsgCount += sub.msgCount || 0;
+        }
+
+        card.subAgentCostValue = subAgentCostValue;
+        card.subAgentTokensValue = subAgentTokensValue;
+        card.subAgentMsgCount = subAgentMsgCount;
+        if (typeof card.costValue === 'number' && isFinite(card.costValue)) card.costValue += subAgentCostValue;
+        else if (subAgentCostValue > 0) card.costValue = subAgentCostValue;
+        card.tokensValue = addTokens(card.tokensValue, subAgentTokensValue);
+        card.msgCount = (card.msgCount || 0) + subAgentMsgCount;
+        applyFormattedMetrics(card);
+
+        const hasActiveSubAgent = card.subAgents.some(sub => sub.status.type === 'running' || sub.status.type === 'asking_parent');
+        if (hasActiveSubAgent && card.status.type !== 'closed') {
           card.status = parseStatusInfo('running');
+          card.waitingTime = null;
+          card.isCacheCold = false;
         }
       }
     }
@@ -916,10 +1018,14 @@ function startServer() {
       }
 
       var line2 = [];
-      if (extended && c.msgCount > 0) line2.push('<span class="label">Msgs:</span> <span class="value">' + c.msgCount + '</span>');
-      if (extended && c.cost) line2.push('<span class="divider">-</span> <span class="label">Cost:</span> <span class="value">' + esc(c.cost) + '</span>');
-      if (extended && c.tokens) line2.push('<span class="divider">-</span> <span class="label">Tokens:</span> <span class="value" title="In = tokens sent to the model (prompt, context, tools) / Out = tokens generated by the model (response, reasoning)">' + esc(c.tokens) + '</span>');
-      if (extended && c.compactionCount > 0) line2.push('<span class="divider">-</span> <span class="label">Compactions:</span> <span class="value">' + c.compactionCount + '</span>');
+      function pushMetric(html) {
+        if (line2.length) line2.push('<span class="divider">-</span> ' + html);
+        else line2.push(html);
+      }
+      if (extended && c.msgCount > 0) pushMetric('<span class="label">Msgs:</span> <span class="value">' + c.msgCount + (c.subAgentMsgCount > 0 ? ' (' + c.subAgentMsgCount + ')' : '') + '</span>');
+      if (extended && c.cost) pushMetric('<span class="label">Cost:</span> <span class="value">' + esc(c.cost) + (c.subAgentCost ? ' (' + esc(c.subAgentCost) + ')' : '') + '</span>');
+      if (extended && c.tokens) pushMetric('<span class="label">Tokens:</span> <span class="value" title="In = tokens sent to the model (prompt, context, tools) / Out = tokens generated by the model (response, reasoning)">' + esc(c.tokens) + (c.subAgentTokens ? ' (' + esc(c.subAgentTokens) + ')' : '') + '</span>');
+      if (extended && c.compactionCount > 0) pushMetric('<span class="label">Compactions:</span> <span class="value">' + c.compactionCount + '</span>');
 
       var html = '<div>' + line1.join('') + '</div>';
       if (line2.length) html += '<div>' + line2.join('') + '</div>';
@@ -1391,6 +1497,38 @@ function startServer() {
               return current.lastRuntimeMs || 0;
             })();
 
+            const costState = (() => {
+              if (typeof data.cost !== 'number' || !isFinite(data.cost)) {
+                return {
+                  cost: current ? current.cost : undefined,
+                  rawCost: current ? current.rawCost : undefined,
+                  baseCost: current ? current.baseCost : undefined
+                };
+              }
+              if (data.observedUsage === true) {
+                return { cost: data.cost, rawCost: undefined, baseCost: undefined };
+              }
+              const rawCost = current && typeof current.rawCost === 'number' ? Math.max(current.rawCost, data.cost) : data.cost;
+              const baseCost = current && typeof current.baseCost === 'number' ? current.baseCost : rawCost;
+              return { cost: Math.max(0, rawCost - baseCost), rawCost: rawCost, baseCost: baseCost };
+            })();
+
+            const tokenState = (() => {
+              if (!data.tokens || typeof data.tokens !== 'object') {
+                return {
+                  tokens: current ? current.tokens : undefined,
+                  rawTokens: current ? current.rawTokens : undefined,
+                  baseTokens: current ? current.baseTokens : undefined
+                };
+              }
+              if (data.observedUsage === true) {
+                return { tokens: data.tokens, rawTokens: undefined, baseTokens: undefined };
+              }
+              const rawTokens = preferSessionTokens(current ? current.rawTokens : undefined, data.tokens);
+              const baseTokens = current && current.baseTokens && typeof current.baseTokens === 'object' ? current.baseTokens : rawTokens;
+              return { tokens: subtractTokens(rawTokens, baseTokens), rawTokens: rawTokens, baseTokens: baseTokens };
+            })();
+
             activeSessions.set(data.sessionId, {
               title: rawTitle,
               agent: data.agent || (current ? current.agent : 'Build'),
@@ -1404,8 +1542,12 @@ function startServer() {
               lastReportTimestamp: reportTimestamp,
               runningSince: runningSince,
               lastRuntimeMs: lastRuntimeMs,
-              cost: (typeof data.cost === 'number') ? data.cost : (current ? current.cost : undefined),
-              tokens: preferSessionTokens(current ? current.tokens : undefined, data.tokens),
+              cost: costState.cost,
+              rawCost: costState.rawCost,
+              baseCost: costState.baseCost,
+              tokens: tokenState.tokens,
+              rawTokens: tokenState.rawTokens,
+              baseTokens: tokenState.baseTokens,
               error: data.error || (current ? current.error : undefined),
               retryInfo: data.retryInfo || (current ? current.retryInfo : undefined),
               msgCount: (typeof data.msgCount === 'number') ? data.msgCount : (current ? current.msgCount : 0),

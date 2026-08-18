@@ -11,3 +11,9 @@
 
 ## Future Tasks
 - Consider clickable sub-agent rows in the sidebar.
+
+## Current Behavior
+- Parent cards stay Running while direct sub-agents are Running or ASKING PARENT.
+- ASKING PARENT is yellow and does not trigger the user-response alarm.
+- Extended parent metrics show total usage with direct sub-agent contribution in parentheses.
+- Resumed sessions show usage observed after the plugin sees the session, not old persisted OpenCode totals.
