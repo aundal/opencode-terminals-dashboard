@@ -20,6 +20,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Info modes** — *Standard* (clean) vs *Udvidet* (cost, tokens, msgs, compactions)
 - **Alarm sounds** — Web Audio beeps on status transitions: off / errors / errors + user responses
 - **Auto-start & auto-kill server** — spawned on demand by the first opencode terminal, exits 30s after the last terminal closes
+- **Session replacement cleanup** — when `/new` creates a replacement session, the old conversation is removed from the live dashboard
 - **Self-healing** — if the server dies, running terminals respawn it and immediately resync all sessions
 - **TUI sidebar plugin** — foldable `Terminal Dashboard:` section in the opencode TUI sidebar with live per-session status
 

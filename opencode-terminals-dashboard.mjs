@@ -236,7 +236,9 @@ function setupPlugin(ctx) {
   const sessions = new Map();
   const knownParents = new Map();
   let rootSessionId = null;
+  let activeTopLevelSessionId = null;
   let heartbeatTimer = null;
+  let disposed = false;
 
   // ---- Dashboard server auto-management: start if missing, lease while alive ----
   let leaseSocket = null;
@@ -274,6 +276,7 @@ function setupPlugin(ctx) {
   }
 
   async function ensureServer() {
+    if (disposed) return;
     if (serverEnsureInFlight) return;
     serverEnsureInFlight = true;
     try {
@@ -281,6 +284,10 @@ function setupPlugin(ctx) {
 
       // 1. Try to lease an already-running server
       let sock = await connectLease().catch(() => null);
+      if (disposed) {
+        if (sock && !sock.destroyed) sock.destroy();
+        return;
+      }
       if (sock) {
         leaseSocket = sock;
         attachLeaseHandlers();
@@ -302,6 +309,10 @@ function setupPlugin(ctx) {
         await new Promise(r => setTimeout(r, 100));
         polled = await connectLease().catch(() => null);
       }
+      if (disposed) {
+        if (polled && !polled.destroyed) polled.destroy();
+        return;
+      }
       if (polled) {
         leaseSocket = polled;
         attachLeaseHandlers();
@@ -319,6 +330,7 @@ function setupPlugin(ctx) {
     sock.on('error', () => { try { sock.destroy(); } catch (e) {} });
     sock.on('close', () => {
       if (leaseSocket === sock) leaseSocket = null;
+      if (disposed) return;
       // Self-heal: server died while this terminal is still alive -> respawn
       setTimeout(() => ensureServer().catch(() => {}), 2000);
     });
@@ -356,6 +368,7 @@ function setupPlugin(ctx) {
         body: JSON.stringify({
           sessionId: s.sessionId,
           parentId: s.parentId,
+          remove: s.remove === true,
           status: s.status,
           title: s.title,
           agent: s.agent,
@@ -371,6 +384,18 @@ function setupPlugin(ctx) {
         })
       });
     } catch (e) {}
+  }
+
+  async function closeSessionLocally(id, now) {
+    const old = sessions.get(id);
+    if (!old) return;
+    old.status = 'closed';
+    old.remove = true;
+    old.waitingForUser = false;
+    old.lastActivityTime = now;
+    await sendReportForSession(old, now, true);
+    knownParents.delete(id);
+    sessions.delete(id);
   }
 
   async function sendAllReports(force = false) {
@@ -472,6 +497,19 @@ function setupPlugin(ctx) {
     }
 
     const isSubAgent = !!effectiveParentId;
+    const isSessionCreate = type === 'session.created' || type === 'session.create';
+
+    if (isSessionCreate && !isSubAgent && activeTopLevelSessionId && activeTopLevelSessionId !== foundId) {
+      for (const [id, oldSession] of Array.from(sessions.entries())) {
+        if (id === activeTopLevelSessionId || oldSession.parentId === activeTopLevelSessionId) {
+          await closeSessionLocally(id, now);
+        }
+      }
+    }
+    if (!isSubAgent && status !== 'closed') {
+      activeTopLevelSessionId = foundId;
+      rootSessionId = foundId;
+    }
 
     if (!s) {
       s = {
@@ -486,7 +524,7 @@ function setupPlugin(ctx) {
       };
       sessions.set(foundId, s);
     } else {
-      if (effectiveParentId) s.parentId = effectiveParentId;
+      s.parentId = effectiveParentId;
       if (foundTitle && foundTitle !== 'Active Terminal' && foundTitle !== 'Sub-Agent Task') {
         s.title = foundTitle;
       }
@@ -537,6 +575,7 @@ function setupPlugin(ctx) {
     if (status === 'closed') {
       knownParents.delete(foundId);
       sessions.delete(foundId);
+      if (activeTopLevelSessionId === foundId) activeTopLevelSessionId = null;
       return;
     }
 
@@ -558,7 +597,9 @@ function setupPlugin(ctx) {
   return {
     event: eventHandler,
     cleanup: () => {
+      disposed = true;
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (leaseSocket && !leaseSocket.destroyed) leaseSocket.destroy();
     }
   };
 }
@@ -1246,6 +1287,12 @@ function startServer() {
 
             if (data.status === 'closed') {
               log('CLOSE', `Terminal closed signal received: ${shortId(data.sessionId)}`);
+              if (data.remove === true) {
+                activeSessions.delete(data.sessionId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: true }));
+                return;
+              }
               if (existing) {
                 const wasRunning = existing.status === 'running';
                 const runningSince = existing.runningSince || existing.statusChangedAt || existing.startTime || now;
@@ -1335,7 +1382,7 @@ function startServer() {
               title: rawTitle,
               agent: data.agent || (current ? current.agent : 'Build'),
               model: data.model || (current ? current.model : 'Claude Haiku 4.5'),
-              parentId: validParentId || (current ? current.parentId : null),
+              parentId: validParentId,
               status: data.status,
               startTime: current ? current.startTime : now,
               statusChangedAt: statusChangedAt,
