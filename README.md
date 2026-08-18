@@ -13,7 +13,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Statuses** — Running, Waiting (Idle), Waiting for User Response, Waiting (Interrupted), Retrying, Failed, Closed, UNKNOWN (fallback)
 - **Error tooltips** — hover a failed card to see the error message (`session.error` events)
 - **Retry tooltips** — hover the Retrying badge for attempt count and reason (`retry` status, `RetryPart`)
-- **Cost & tokens** — live spend and token counts per session (extended mode)
+- **Cost & tokens** — live session-total spend and token counts since session start (extended mode)
 - **Msg/Compaction counters** — message and compaction counts per session
 - **Todos** — collapsible TODOS accordion with per-item status icons (pending / in_progress / completed / cancelled)
 - **Filter** — filter cards by title, agent or status

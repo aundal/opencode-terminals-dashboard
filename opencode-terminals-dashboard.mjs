@@ -124,6 +124,21 @@ function cleanTitle(rawTitle) {
   return t.trim();
 }
 
+function tokenTotal(tokens) {
+  if (!tokens || typeof tokens !== 'object') return 0;
+  let total = 0;
+  for (const value of Object.values(tokens)) {
+    if (typeof value === 'number' && isFinite(value)) total += value;
+  }
+  return total;
+}
+
+function preferSessionTokens(currentTokens, nextTokens) {
+  if (!nextTokens || typeof nextTokens !== 'object') return currentTokens;
+  if (!currentTokens || typeof currentTokens !== 'object') return nextTokens;
+  return tokenTotal(nextTokens) >= tokenTotal(currentTokens) ? nextTokens : currentTokens;
+}
+
 function findAgentName(event, session) {
   if (event?.properties) {
     if (typeof event.properties.agent === 'string' && event.properties.agent) return event.properties.agent;
@@ -540,11 +555,9 @@ function setupPlugin(ctx) {
     const info = props.info || {};
     const part = props.part || {};
 
-    // 1. Cost / tokens: from message.updated (info) or step-finish part
+    // 1. Cost / tokens: use session totals from message.updated only.
     if (typeof info.cost === 'number') s.cost = info.cost;
-    if (info.tokens && typeof info.tokens === 'object') s.tokens = info.tokens;
-    if (typeof part.cost === 'number') s.cost = part.cost;
-    if (part.tokens && typeof part.tokens === 'object') s.tokens = part.tokens;
+    if (info.tokens && typeof info.tokens === 'object') s.tokens = preferSessionTokens(s.tokens, info.tokens);
 
     // 2. Error: from session.error / message error
     const err = props.error || info.error || {};
@@ -1392,7 +1405,7 @@ function startServer() {
               runningSince: runningSince,
               lastRuntimeMs: lastRuntimeMs,
               cost: (typeof data.cost === 'number') ? data.cost : (current ? current.cost : undefined),
-              tokens: data.tokens || (current ? current.tokens : undefined),
+              tokens: preferSessionTokens(current ? current.tokens : undefined, data.tokens),
               error: data.error || (current ? current.error : undefined),
               retryInfo: data.retryInfo || (current ? current.retryInfo : undefined),
               msgCount: (typeof data.msgCount === 'number') ? data.msgCount : (current ? current.msgCount : 0),
