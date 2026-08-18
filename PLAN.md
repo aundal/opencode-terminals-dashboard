@@ -19,6 +19,7 @@
 - Aborted/cancelled/interrupted sessions stay Waiting (Interrupted) until real new work starts.
 - Extended parent cost/tokens include direct sub-agent usage without parentheses.
 - Extended parent messages always show total plus direct sub-agent contribution in parentheses.
+- Parent Msgs, Cost and Tokens aggregate cumulative sub-agent snapshots and do not decrease when sub-agent rows close or disappear.
 - Running sessions decay to Waiting (Idle) after 30 seconds without activity.
 - Resumed sessions show usage observed after the plugin sees the session, not old persisted OpenCode totals.
 - Dashboard settings live in a gear menu beside search: view mode, grouping and alarm toggles.
@@ -33,3 +34,7 @@
 - Cards with in_progress todos are displayed as Running unless closed or interrupted.
 - Dashboard cards are fixed at 360px wide on desktop and full width on narrow screens.
 - TUI sidebar session titles are capped at 30 characters.
+- Dashboard timer values use fixed-width monospace tabular numbers to prevent layout jumps.
+- Fixed-width timer styling applies only to Uptime, Runtime and Idle, not to Compactions or other metrics.
+- In extended view, Tokens render on their own metrics line.
+- Alarm sound is a two-tone sine beep: low then high, with gain 0.3 and doubled durations.

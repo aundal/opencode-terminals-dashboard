@@ -678,6 +678,52 @@ export default DashboardReporterPluginV1;
 // ====================================================================
 const activeSessions = new Map();
 const serverLastLogs = new Map();
+const subAgentMetricSnapshots = new Map();
+
+function subAgentMetricKey(parentId, sessionId) {
+  return parentId + '\0' + sessionId;
+}
+
+function rememberSubAgentMetrics(parentId, sessionId, data) {
+  if (!isSessionId(parentId) || !isSessionId(sessionId)) return;
+
+  const key = subAgentMetricKey(parentId, sessionId);
+  const current = subAgentMetricSnapshots.get(key) || { parentId, sessionId };
+  subAgentMetricSnapshots.set(key, {
+    parentId,
+    sessionId,
+    cost: (typeof data.cost === 'number' && isFinite(data.cost))
+      ? Math.max(typeof current.cost === 'number' ? current.cost : 0, data.cost)
+      : current.cost,
+    tokens: data.tokens && typeof data.tokens === 'object'
+      ? preferSessionTokens(current.tokens, data.tokens)
+      : current.tokens,
+    msgCount: (typeof data.msgCount === 'number')
+      ? Math.max(current.msgCount || 0, data.msgCount)
+      : (current.msgCount || 0)
+  });
+}
+
+function forgetSubAgentMetricsForParent(parentId) {
+  for (const [key, snapshot] of subAgentMetricSnapshots.entries()) {
+    if (snapshot.parentId === parentId) subAgentMetricSnapshots.delete(key);
+  }
+}
+
+function getSubAgentMetricTotals(parentId) {
+  let costValue = 0;
+  let tokensValue;
+  let msgCount = 0;
+
+  for (const snapshot of subAgentMetricSnapshots.values()) {
+    if (snapshot.parentId !== parentId) continue;
+    if (typeof snapshot.cost === 'number' && isFinite(snapshot.cost)) costValue += snapshot.cost;
+    tokensValue = addTokens(tokensValue, snapshot.tokens);
+    msgCount += snapshot.msgCount || 0;
+  }
+
+  return { costValue, tokensValue, msgCount };
+}
 
 function log(tag, message) {
   const time = new Date().toLocaleTimeString();
@@ -735,6 +781,7 @@ function startServer() {
       // Stale sessions should disappear quietly unless an explicit close event was received.
       if (session.status !== 'closed' && now - session.lastHeartbeat > STALE_HEARTBEAT_PURGE_MS) {
         log('PURGE', `Session heartbeat expired: ${shortId(id)} (${session.title})`);
+        if (!session.parentId) forgetSubAgentMetricsForParent(id);
         activeSessions.delete(id);
         continue;
       }
@@ -742,6 +789,7 @@ function startServer() {
       // Retain explicit closed sessions briefly before purging completely.
       if (session.status === 'closed' && session.closedAt && (now - session.closedAt > CLOSED_SESSION_RETENTION_MS)) {
         log('PURGE', `Closed session retention expired (${CLOSED_SESSION_RETENTION_MS / 1000}s): ${shortId(id)} (${session.title})`);
+        if (!session.parentId) forgetSubAgentMetricsForParent(id);
         activeSessions.delete(id);
       }
     }
@@ -876,25 +924,18 @@ function startServer() {
     // Parent cards include their direct sub-agent usage and stay running while active work is tracked.
     for (const card of rootCards) {
       let hasActiveSubAgent = false;
-      if (card.subAgents && card.subAgents.length > 0) {
-        let subAgentCostValue = 0;
-        let subAgentTokensValue;
-        let subAgentMsgCount = 0;
-        for (const sub of card.subAgents) {
-          if (typeof sub.costValue === 'number' && isFinite(sub.costValue)) subAgentCostValue += sub.costValue;
-          subAgentTokensValue = addTokens(subAgentTokensValue, sub.tokensValue);
-          subAgentMsgCount += sub.msgCount || 0;
-        }
-
-        card.subAgentCostValue = subAgentCostValue;
-        card.subAgentTokensValue = subAgentTokensValue;
-        card.subAgentMsgCount = subAgentMsgCount;
-        if (typeof card.costValue === 'number' && isFinite(card.costValue)) card.costValue += subAgentCostValue;
-        else if (subAgentCostValue > 0) card.costValue = subAgentCostValue;
-        card.tokensValue = addTokens(card.tokensValue, subAgentTokensValue);
-        card.msgCount = (card.msgCount || 0) + subAgentMsgCount;
+      const subAgentTotals = getSubAgentMetricTotals(card.id);
+      if (subAgentTotals.costValue > 0 || tokenTotal(subAgentTotals.tokensValue) > 0 || subAgentTotals.msgCount > 0) {
+        card.subAgentCostValue = subAgentTotals.costValue;
+        card.subAgentTokensValue = subAgentTotals.tokensValue;
+        card.subAgentMsgCount = subAgentTotals.msgCount;
+        if (typeof card.costValue === 'number' && isFinite(card.costValue)) card.costValue += subAgentTotals.costValue;
+        else if (subAgentTotals.costValue > 0) card.costValue = subAgentTotals.costValue;
+        card.tokensValue = addTokens(card.tokensValue, subAgentTotals.tokensValue);
+        card.msgCount = (card.msgCount || 0) + subAgentTotals.msgCount;
         applyFormattedMetrics(card);
-
+      }
+      if (card.subAgents && card.subAgents.length > 0) {
         hasActiveSubAgent = card.subAgents.some(sub => sub.status.type === 'running' || sub.status.type === 'asking_parent' || hasInProgressTodo(sub));
       }
       if ((hasActiveSubAgent || hasInProgressTodo(card)) && card.status.type !== 'closed' && card.status.type !== 'interrupted') {
@@ -1079,23 +1120,25 @@ function startServer() {
     function metaLine(c, extended, compact) {
       var line1 = [];
       if (!compact) {
-        line1.push('<span class="label">Uptime:</span> <span class="value">' + c.totalUptime + '</span>');
-        line1.push('<span class="divider">-</span> <span class="label">Runtime:</span> <span class="value">' + c.runtime + '</span>');
-        if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value highlight-waiting">' + c.waitingTime + '</span>' + (c.isCacheCold ? ' <span class="cold-cache" title="Cache cold">&#10052;</span>' : ''));
+        line1.push('<span class="label">Uptime:</span> <span class="value timer-value">' + c.totalUptime + '</span>');
+        line1.push('<span class="divider">-</span> <span class="label">Runtime:</span> <span class="value timer-value">' + c.runtime + '</span>');
+        if (c.waitingTime) line1.push('<span class="divider">-</span> <span class="label">Idle:</span> <span class="value timer-value highlight-waiting">' + c.waitingTime + '</span>' + (c.isCacheCold ? ' <span class="cold-cache" title="Cache cold">&#10052;</span>' : ''));
       }
 
       var line2 = [];
+      var line3 = [];
       function pushMetric(html) {
         if (line2.length) line2.push('<span class="divider">-</span> ' + html);
         else line2.push(html);
       }
       if (extended && c.msgCount > 0) pushMetric('<span class="label">Msgs:</span> <span class="value">' + c.msgCount + ' (' + (c.subAgentMsgCount || 0) + ')' + '</span>');
       if (extended && c.cost) pushMetric('<span class="label">Cost:</span> <span class="value">' + esc(c.cost) + '</span>');
-      if (extended && c.tokens) pushMetric('<span class="label">Tokens:</span> <span class="value" title="In = tokens sent to the model (prompt, context, tools) / Out = tokens generated by the model (response, reasoning)">' + esc(c.tokens) + '</span>');
       if (extended && c.compactionCount > 0) pushMetric('<span class="label">Compactions:</span> <span class="value">' + c.compactionCount + '</span>');
+      if (extended && c.tokens) line3.push('<span class="label">Tokens:</span> <span class="value" title="In = tokens sent to the model (prompt, context, tools) / Out = tokens generated by the model (response, reasoning)">' + esc(c.tokens) + '</span>');
 
       var html = '<div>' + line1.join('') + '</div>';
       if (line2.length) html += '<div>' + line2.join('') + '</div>';
+      if (line3.length) html += '<div>' + line3.join('') + '</div>';
       return html;
     }
 
@@ -1141,16 +1184,24 @@ function startServer() {
         if (!window.audioCtx) window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         var ctx = window.audioCtx;
         if (ctx.state === 'suspended') ctx.resume();
-        var o = ctx.createOscillator();
-        var g = ctx.createGain();
-        o.connect(g);
-        g.connect(ctx.destination);
-        o.type = 'sine';
-        o.frequency.value = freq;
-        g.gain.setValueAtTime(0.12, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
-        o.start();
-        o.stop(ctx.currentTime + dur);
+        var lowFreq = Math.max(180, freq * 0.75);
+        var half = dur / 2;
+
+        function playTone(startAt, toneFreq, toneDur) {
+          var o = ctx.createOscillator();
+          var g = ctx.createGain();
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.type = 'sine';
+          o.frequency.value = toneFreq;
+          g.gain.setValueAtTime(0.3, startAt);
+          g.gain.exponentialRampToValueAtTime(0.0001, startAt + toneDur);
+          o.start(startAt);
+          o.stop(startAt + toneDur);
+        }
+
+        playTone(ctx.currentTime, lowFreq, half);
+        playTone(ctx.currentTime + half, freq, half);
       } catch(e) {}
     }
 
@@ -1161,9 +1212,9 @@ function startServer() {
       Object.keys(now).forEach(function(id) {
         var prev = window.lastStatuses[id];
         if (prev && prev.status !== now[id].status) {
-          if (now[id].status === 'failed' && errors) beep(880, 0.5);
-          else if (now[id].status === 'user_response' && now[id].alarmEligible && users) beep(660, 0.3);
-          else if (now[id].status === 'closed' && jobsDone) beep(520, 0.3);
+          if (now[id].status === 'failed' && errors) beep(880, 1.0);
+          else if (now[id].status === 'user_response' && now[id].alarmEligible && users) beep(660, 0.6);
+          else if (now[id].status === 'closed' && jobsDone) beep(520, 0.6);
         }
       });
       window.lastStatuses = now;
@@ -1435,6 +1486,7 @@ function startServer() {
     .time-compact { font-size: 0.8rem; color: #cbd5e1; margin-bottom: 6px; }
     .time-compact .label { color: #94a3b8; }
     .time-compact .value { font-weight: 600; color: #f8fafc; }
+    .time-compact .timer-value { display: inline-block; min-width: 5.36ch; text-align: right; font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-variant-numeric: tabular-nums; }
     .time-compact .divider { margin: 0 6px; color: #475569; }
     .time-compact .highlight-waiting { color: #fde047; font-weight: 600; }
     .time-compact .cold-cache { color: #7dd3fc; font-size: 0.9rem; vertical-align: middle; }
@@ -1664,9 +1716,14 @@ function startServer() {
               serverLastLogs.set(data.sessionId, { time: now, status: data.status, title: data.title });
             }
 
+            if (data.parentId && isSessionId(data.parentId)) {
+              rememberSubAgentMetrics(data.parentId, data.sessionId, data);
+            }
+
             if (data.status === 'closed') {
               log('CLOSE', `Terminal closed signal received: ${shortId(data.sessionId)}`);
               if (data.remove === true) {
+                if (!data.parentId || !isSessionId(data.parentId)) forgetSubAgentMetricsForParent(data.sessionId);
                 activeSessions.delete(data.sessionId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ ok: true }));
@@ -1792,7 +1849,7 @@ function startServer() {
               return { tokens: subtractTokens(rawTokens, baseTokens), rawTokens: rawTokens, baseTokens: baseTokens };
             })();
 
-            activeSessions.set(data.sessionId, {
+            const nextSession = {
               title: rawTitle,
               agent: data.agent || (current ? current.agent : 'Build'),
               model: data.model || (current ? current.model : 'Claude Haiku 4.5'),
@@ -1817,7 +1874,10 @@ function startServer() {
               msgCount: (typeof data.msgCount === 'number') ? data.msgCount : (current ? current.msgCount : 0),
               compactionCount: (typeof data.compactionCount === 'number') ? data.compactionCount : (current ? current.compactionCount : 0),
               todos: data.todos || (current ? current.todos : undefined)
-            });
+            };
+
+            activeSessions.set(data.sessionId, nextSession);
+            if (validParentId) rememberSubAgentMetrics(validParentId, data.sessionId, nextSession);
 
             if (isNew) {
               log('HEARTBEAT-NEW', `>>> NEW SESSION CONNECTED: ${rawTitle} (${shortId(data.sessionId)})${validParentId ? ` [Sub-agent of ${shortId(validParentId)}]` : ''}`);
