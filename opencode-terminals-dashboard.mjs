@@ -50,11 +50,13 @@ function findSessionId(event, session, ctx) {
     if (typeof event.properties.sessionId === 'string' && isSessionId(event.properties.sessionId)) return event.properties.sessionId;
     if (typeof event.properties.session_id === 'string' && isSessionId(event.properties.session_id)) return event.properties.session_id;
     if (typeof event.properties.info?.sessionID === 'string' && isSessionId(event.properties.info.sessionID)) return event.properties.info.sessionID;
+    if (typeof event.properties.part?.sessionID === 'string' && isSessionId(event.properties.part.sessionID)) return event.properties.part.sessionID;
   }
   if (event) {
     if (typeof event.sessionId === 'string' && isSessionId(event.sessionId)) return event.sessionId;
     if (typeof event.session_id === 'string' && isSessionId(event.session_id)) return event.session_id;
     if (typeof event.sessionID === 'string' && isSessionId(event.sessionID)) return event.sessionID;
+    if (typeof event.part?.sessionID === 'string' && isSessionId(event.part.sessionID)) return event.part.sessionID;
   }
   if (session) {
     if (typeof session === 'string' && isSessionId(session)) return session;
@@ -125,12 +127,34 @@ function cleanTitle(rawTitle) {
 }
 
 function tokenTotal(tokens) {
-  if (!tokens || typeof tokens !== 'object') return 0;
-  let total = 0;
-  for (const value of Object.values(tokens)) {
-    if (typeof value === 'number' && isFinite(value)) total += value;
-  }
-  return total;
+  const normalized = normalizeTokens(tokens);
+  if (!normalized) return 0;
+  return normalized.input + normalized.output + normalized.reasoning + normalized.cache.read + normalized.cache.write;
+}
+
+function normalizeTokens(tokens) {
+  if (!tokens || typeof tokens !== 'object') return undefined;
+  const cache = tokens.cache && typeof tokens.cache === 'object' ? tokens.cache : {};
+  const normalized = {
+    input: typeof tokens.input === 'number' && isFinite(tokens.input) ? tokens.input : 0,
+    output: typeof tokens.output === 'number' && isFinite(tokens.output) ? tokens.output : 0,
+    reasoning: typeof tokens.reasoning === 'number' && isFinite(tokens.reasoning) ? tokens.reasoning : 0,
+    cache: {
+      read: typeof cache.read === 'number' && isFinite(cache.read) ? cache.read : 0,
+      write: typeof cache.write === 'number' && isFinite(cache.write) ? cache.write : 0,
+    }
+  };
+  return tokenTotalWithoutGuard(normalized) > 0 ? normalized : normalized;
+}
+
+function tokenTotalWithoutGuard(tokens) {
+  return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write;
+}
+
+function tokenFingerprint(tokens) {
+  const normalized = normalizeTokens(tokens);
+  if (!normalized) return 'none';
+  return [normalized.input, normalized.output, normalized.reasoning, normalized.cache.read, normalized.cache.write].join(':');
 }
 
 function preferSessionTokens(currentTokens, nextTokens) {
@@ -140,32 +164,46 @@ function preferSessionTokens(currentTokens, nextTokens) {
 }
 
 function zeroTokensLike(tokens) {
-  const out = {};
-  if (!tokens || typeof tokens !== 'object') return out;
-  for (const key of Object.keys(tokens)) out[key] = 0;
-  return out;
+  const normalized = normalizeTokens(tokens);
+  if (!normalized) return { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+  return {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 }
+  };
 }
 
 function subtractTokens(totalTokens, baseTokens) {
-  if (!totalTokens || typeof totalTokens !== 'object') return undefined;
-  const out = {};
-  for (const key of Object.keys(totalTokens)) {
-    const total = typeof totalTokens[key] === 'number' && isFinite(totalTokens[key]) ? totalTokens[key] : 0;
-    const base = baseTokens && typeof baseTokens[key] === 'number' && isFinite(baseTokens[key]) ? baseTokens[key] : 0;
-    out[key] = Math.max(0, total - base);
-  }
-  return out;
+  const total = normalizeTokens(totalTokens);
+  if (!total) return undefined;
+  const base = normalizeTokens(baseTokens) || zeroTokensLike(total);
+  return {
+    input: Math.max(0, total.input - base.input),
+    output: Math.max(0, total.output - base.output),
+    reasoning: Math.max(0, total.reasoning - base.reasoning),
+    cache: {
+      read: Math.max(0, total.cache.read - base.cache.read),
+      write: Math.max(0, total.cache.write - base.cache.write),
+    }
+  };
 }
 
 function addTokens(a, b) {
-  const out = {};
-  for (const tokens of [a, b]) {
-    if (!tokens || typeof tokens !== 'object') continue;
-    for (const [key, value] of Object.entries(tokens)) {
-      if (typeof value === 'number' && isFinite(value)) out[key] = (out[key] || 0) + value;
+  const left = normalizeTokens(a);
+  const right = normalizeTokens(b);
+  if (!left && !right) return undefined;
+  const lhs = left || zeroTokensLike(right);
+  const rhs = right || zeroTokensLike(left);
+  return {
+    input: lhs.input + rhs.input,
+    output: lhs.output + rhs.output,
+    reasoning: lhs.reasoning + rhs.reasoning,
+    cache: {
+      read: lhs.cache.read + rhs.cache.read,
+      write: lhs.cache.write + rhs.cache.write,
     }
-  }
-  return Object.keys(out).length ? out : undefined;
+  };
 }
 
 function findActiveSubAgent(sessionId, sessionMap) {
@@ -269,6 +307,11 @@ function setupPlugin(ctx) {
   let activeTopLevelSessionId = null;
   let heartbeatTimer = null;
   let disposed = false;
+
+  function completedMessageKey(info) {
+    if (info && typeof info.id === 'string' && info.id) return info.id;
+    return null;
+  }
 
   // ---- Dashboard server auto-management: start if missing, lease while alive ----
   let leaseSocket = null;
@@ -374,20 +417,21 @@ function setupPlugin(ctx) {
 
     const statusChanged = s.status !== lastState.status;
     const titleChanged = s.title !== lastState.title;
+    const tokensChanged = tokenFingerprint(s.tokens) !== lastState.tokens;
     const timeElapsed = now - lastTime;
 
     // RULE 1: Module-level hard rate limit — Never send more than 1 report per 1000ms for the same session across all instances
-    if (!force && !statusChanged && timeElapsed < 1000) {
+    if (!force && !statusChanged && !tokensChanged && timeElapsed < 1000) {
       return;
     }
 
     // RULE 2: Heartbeat interval — If < 5 seconds elapsed, only send if status or title actually changed
-    if (!force && !statusChanged && !titleChanged && timeElapsed < 5000) {
+    if (!force && !statusChanged && !titleChanged && !tokensChanged && timeElapsed < 5000) {
       return;
     }
 
     globalSessionThrottles.set(s.sessionId, now);
-    globalSessionLastState.set(s.sessionId, { status: s.status, title: s.title });
+    globalSessionLastState.set(s.sessionId, { status: s.status, title: s.title, tokens: tokenFingerprint(s.tokens) });
 
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -568,9 +612,8 @@ function setupPlugin(ctx) {
         waitingForUser: isUserPrompt && !isSubAgent,
         alarmEligible: status === 'user_response' && isUserPrompt && !isSubAgent,
         baseCost: isSessionCreate ? 0 : undefined,
-        baseTokens: undefined,
         rawCost: undefined,
-        rawTokens: undefined,
+        completedMessageIDs: new Set(),
         lastActivityTime: now
       };
       sessions.set(foundId, s);
@@ -592,16 +635,26 @@ function setupPlugin(ctx) {
     const info = props.info || {};
     const part = props.part || {};
 
-    // 1. Cost / tokens: show usage observed in this dashboard session, not persisted totals.
+    // 1. Cost: show usage observed in this dashboard session, not persisted totals.
     if (typeof info.cost === 'number') {
       s.rawCost = typeof s.rawCost === 'number' ? Math.max(s.rawCost, info.cost) : info.cost;
       if (typeof s.baseCost !== 'number') s.baseCost = isSessionCreate ? 0 : s.rawCost;
       s.cost = Math.max(0, s.rawCost - s.baseCost);
     }
-    if (info.tokens && typeof info.tokens === 'object') {
-      s.rawTokens = preferSessionTokens(s.rawTokens, info.tokens);
-      if (!s.baseTokens || typeof s.baseTokens !== 'object') s.baseTokens = isSessionCreate ? zeroTokensLike(s.rawTokens) : s.rawTokens;
-      s.tokens = subtractTokens(s.rawTokens, s.baseTokens);
+    if (
+      type === 'message.updated' &&
+      info &&
+      info.role === 'assistant' &&
+      info.tokens &&
+      typeof info.tokens === 'object' &&
+      info.time &&
+      typeof info.time.completed === 'number'
+    ) {
+      const messageKey = completedMessageKey(info);
+      if (messageKey && !s.completedMessageIDs.has(messageKey)) {
+        s.completedMessageIDs.add(messageKey);
+        s.tokens = addTokens(s.tokens, info.tokens);
+      }
     }
 
     // 2. Error: from session.error / message error
@@ -679,6 +732,8 @@ export default DashboardReporterPluginV1;
 const activeSessions = new Map();
 const serverLastLogs = new Map();
 const subAgentMetricSnapshots = new Map();
+const sessionTokenFileCache = new Map();
+const DEBUG_SESSION_ROOT = path.join(os.homedir(), '.config', 'opencode', 'debug');
 
 function subAgentMetricKey(parentId, sessionId) {
   return parentId + '\0' + sessionId;
@@ -723,6 +778,58 @@ function getSubAgentMetricTotals(parentId) {
   }
 
   return { costValue, tokensValue, msgCount };
+}
+
+function findDebugSessionDir(sessionId) {
+  if (!isSessionId(sessionId)) return null;
+  try {
+    const entries = fs.readdirSync(DEBUG_SESSION_ROOT, { withFileTypes: true });
+    const match = entries.find((entry) => entry.isDirectory() && entry.name.startsWith(sessionId + '('));
+    return match ? path.join(DEBUG_SESSION_ROOT, match.name) : null;
+  } catch {
+    return null;
+  }
+}
+
+function latestSessionJsonFile(sessionDir) {
+  try {
+    const files = fs.readdirSync(sessionDir)
+      .map((name) => (/^(\d+)\.json$/.exec(name) ? { name, order: Number(/^(\d+)\.json$/.exec(name)[1]) } : null))
+      .filter(Boolean)
+      .sort((a, b) => b.order - a.order);
+    return files.length ? path.join(sessionDir, files[0].name) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedSessionTokens(sessionId) {
+  const sessionDir = findDebugSessionDir(sessionId);
+  if (!sessionDir) return undefined;
+  const jsonFile = latestSessionJsonFile(sessionDir);
+  if (!jsonFile) return undefined;
+
+  try {
+    const stat = fs.statSync(jsonFile);
+    const cacheKey = jsonFile;
+    const cached = sessionTokenFileCache.get(cacheKey);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.tokens;
+
+    const raw = fs.readFileSync(jsonFile, 'utf8');
+    const data = JSON.parse(raw);
+    const totals = Array.isArray(data)
+      ? data.reduce((sum, message) => {
+          const info = message && typeof message === 'object' ? message.info : null;
+          if (!info || info.role !== 'assistant' || !info.tokens || !info.time || typeof info.time.completed !== 'number') return sum;
+          return addTokens(sum, info.tokens);
+        }, undefined)
+      : undefined;
+
+    sessionTokenFileCache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, tokens: totals });
+    return totals;
+  } catch {
+    return undefined;
+  }
 }
 
 function log(tag, message) {
@@ -832,7 +939,8 @@ function startServer() {
   }
 
   function formatTokens(tokens) {
-    if (!tokens || typeof tokens !== 'object') return null;
+    const normalized = normalizeTokens(tokens);
+    if (!normalized) return null;
     const fmt = (n) => {
       if (typeof n !== 'number' || !isFinite(n)) return null;
       if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
@@ -840,9 +948,11 @@ function startServer() {
       return String(n);
     };
     const parts = [];
-    const input = fmt(tokens.input);
-    const output = fmt(tokens.output);
+    const input = fmt(normalized.input);
+    const cache = fmt(normalized.cache.read + normalized.cache.write);
+    const output = fmt(normalized.output + normalized.reasoning);
     if (input !== null) parts.push(input + ' in');
+    if (cache !== null && normalized.cache.read + normalized.cache.write > 0) parts.push(cache + ' cache');
     if (output !== null) parts.push(output + ' out');
     return parts.length ? parts.join(' / ') : null;
   }
@@ -894,6 +1004,8 @@ function startServer() {
       todos: Array.isArray(s.todos) ? s.todos : [],
       subAgents: []
     };
+    const persistedTokens = readPersistedSessionTokens(id);
+    if (persistedTokens) card.tokensValue = persistedTokens;
     applyFormattedMetrics(card);
     return card;
   }
@@ -938,7 +1050,7 @@ function startServer() {
       if (card.subAgents && card.subAgents.length > 0) {
         hasActiveSubAgent = card.subAgents.some(sub => sub.status.type === 'running' || sub.status.type === 'asking_parent' || hasInProgressTodo(sub));
       }
-      if ((hasActiveSubAgent || hasInProgressTodo(card)) && card.status.type !== 'closed' && card.status.type !== 'interrupted') {
+      if (hasActiveSubAgent && card.status.type !== 'closed' && card.status.type !== 'interrupted') {
         card.status = parseStatusInfo('running');
         card.waitingTime = null;
         card.isCacheCold = false;
@@ -1833,21 +1945,11 @@ function startServer() {
               return { cost: Math.max(0, rawCost - baseCost), rawCost: rawCost, baseCost: baseCost };
             })();
 
-            const tokenState = (() => {
-              if (!data.tokens || typeof data.tokens !== 'object') {
-                return {
-                  tokens: current ? current.tokens : undefined,
-                  rawTokens: current ? current.rawTokens : undefined,
-                  baseTokens: current ? current.baseTokens : undefined
-                };
-              }
-              if (data.observedUsage === true) {
-                return { tokens: data.tokens, rawTokens: undefined, baseTokens: undefined };
-              }
-              const rawTokens = preferSessionTokens(current ? current.rawTokens : undefined, data.tokens);
-              const baseTokens = current && current.baseTokens && typeof current.baseTokens === 'object' ? current.baseTokens : rawTokens;
-              return { tokens: subtractTokens(rawTokens, baseTokens), rawTokens: rawTokens, baseTokens: baseTokens };
-            })();
+            const tokenState = {
+              tokens: current ? current.tokens : undefined,
+              rawTokens: current ? current.rawTokens : undefined,
+              baseTokens: current ? current.baseTokens : undefined
+            };
 
             const nextSession = {
               title: rawTitle,

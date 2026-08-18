@@ -31,10 +31,12 @@
 - Gear menu includes Auto Folding toggles for TODO and AGENTS accordions.
 - Group headers are displayed at the top of group boxes and can be clicked to fold/unfold groups.
 - Group headers show card counts. Label grouping hides duplicate label badges inside cards.
-- Cards with in_progress todos are displayed as Running unless closed or interrupted.
+- In-progress todos no longer force parent cards into Running; only active sub-agents do.
 - Dashboard cards are fixed at 360px wide on desktop and full width on narrow screens.
 - TUI sidebar session titles are capped at 30 characters.
 - Dashboard timer values use fixed-width monospace tabular numbers to prevent layout jumps.
 - Fixed-width timer styling applies only to Uptime, Runtime and Idle, not to Compactions or other metrics.
 - In extended view, Tokens render on their own metrics line.
 - Alarm sound is a two-tone sine beep: low then high, with gain 0.3 and doubled durations.
+- Dashboard Tokens now show cumulative used tokens by summing completed assistant message.updated info.tokens, formatted as in / cache / out, with reasoning counted under out.
+- Server now falls back to persisted session debug JSON to compute total tokens per session from completed assistant messages.
