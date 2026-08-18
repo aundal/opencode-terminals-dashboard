@@ -11,7 +11,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Live session cards** — status, runtime, idle time, model and agent per session
 - **Sub-agent trees** — nested cards for sub-agents, collapsible accordion
 - **Statuses** — Running, Waiting (Idle), Waiting for User Response, Waiting (Interrupted), Retrying, Failed, Closed, UNKNOWN (fallback)
-- **Sub-agent parent handoff** — sub-agents can show ASKING PARENT without triggering the user-response alarm
+- **Sub-agent parent handoff** — sub-agents can show ASKING PARENT without triggering the user-response alarm; alarms only fire for verified parent prompts
 - **Error tooltips** — hover a failed card to see the error message (`session.error` events)
 - **Retry tooltips** — hover the Retrying badge for attempt count and reason (`retry` status, `RetryPart`)
 - **Cost & tokens** — live usage observed since the dashboard saw the session; parent cards include sub-agent usage in parentheses (extended mode)

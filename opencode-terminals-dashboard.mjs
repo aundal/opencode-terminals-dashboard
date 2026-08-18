@@ -246,36 +246,6 @@ function isQuestionOrPermissionEvent(event) {
     }
 
     const props = event.properties || {};
-
-    const getToolStr = (obj) => {
-      if (!obj) return '';
-      if (typeof obj === 'string') return obj;
-      if (typeof obj.name === 'string') return obj.name;
-      if (typeof obj.tool === 'string') return obj.tool;
-      return '';
-    };
-
-    let toolName = (
-      getToolStr(props.tool) ||
-      getToolStr(props.toolName) ||
-      getToolStr(props.tool_name) ||
-      getToolStr(props.name) ||
-      getToolStr(props.info?.tool) ||
-      getToolStr(props.info?.name) ||
-      getToolStr(props.part?.tool) ||
-      getToolStr(props.part?.name) ||
-      getToolStr(props.part?.type) ||
-      getToolStr(props.call?.tool) ||
-      getToolStr(props.call?.name)
-    ).toLowerCase();
-
-    if (
-      toolName.includes('question') || toolName.includes('ask') || 
-      toolName.includes('permission') || toolName.includes('prompt')
-    ) {
-      return true;
-    }
-
     if (props.question?.options || props.questions || props.info?.question?.options) {
       return true;
     }
@@ -424,6 +394,7 @@ function setupPlugin(ctx) {
           parentId: s.parentId,
           remove: s.remove === true,
           status: s.status,
+          alarmEligible: s.alarmEligible === true,
           title: s.title,
           agent: s.agent,
           model: s.model,
@@ -493,6 +464,7 @@ function setupPlugin(ctx) {
           const now = Date.now();
           activeSubAgent.status = 'asking_parent';
           activeSubAgent.waitingForUser = false;
+          activeSubAgent.alarmEligible = false;
           activeSubAgent.lastActivityTime = now;
           await sendReportForSession(activeSubAgent, now, true);
           return;
@@ -588,6 +560,7 @@ function setupPlugin(ctx) {
         model: formatModelName(foundModel),
         status: status,
         waitingForUser: isUserPrompt && !isSubAgent,
+        alarmEligible: status === 'user_response' && isUserPrompt && !isSubAgent,
         baseCost: isSessionCreate ? 0 : undefined,
         baseTokens: undefined,
         rawCost: undefined,
@@ -605,6 +578,7 @@ function setupPlugin(ctx) {
 
       s.lastActivityTime = now;
       s.status = status;
+      s.alarmEligible = status === 'user_response' && isUserPrompt && !isSubAgent;
     }
 
     // ================== Extended telemetry capture ==================
@@ -827,10 +801,11 @@ function startServer() {
   }
 
   function buildCardData(id, s, now) {
-    const isWaitingState = s.status === 'waiting' || s.status === 'user_response' || s.status === 'asking_parent' || s.status === 'interrupted';
+    const displayStatus = s.status === 'user_response' && s.alarmEligible !== true ? 'waiting' : s.status;
+    const isWaitingState = displayStatus === 'waiting' || displayStatus === 'user_response' || displayStatus === 'asking_parent' || displayStatus === 'interrupted';
     const waitingTimeMs = isWaitingState ? (now - s.statusChangedAt) : 0;
     const endTime = s.closedAt ? s.closedAt : now;
-    const runtimeMs = s.status === 'running'
+    const runtimeMs = displayStatus === 'running'
       ? Math.max(0, endTime - (s.runningSince || s.statusChangedAt || s.startTime))
       : Math.max(0, s.lastRuntimeMs || 0);
     const uptimeMs = Math.max(0, endTime - s.startTime);
@@ -841,7 +816,8 @@ function startServer() {
       agent: s.agent || 'Build',
       model: s.model || 'Claude Haiku 4.5',
       parentId: s.parentId,
-      status: parseStatusInfo(s.status),
+      status: parseStatusInfo(displayStatus),
+      alarmEligible: s.alarmEligible === true,
       startTime: s.startTime,
       totalUptime: formatCompactDuration(uptimeMs),
       runtime: formatCompactDuration(runtimeMs),
@@ -1089,13 +1065,13 @@ function startServer() {
     function checkAlarms(cards, jobsDone, errors, users) {
       if (!jobsDone && !errors && !users) { window.lastStatuses = {}; return; }
       var now = {};
-      cards.forEach(function(c) { now[c.id] = c.status.type; });
+      cards.forEach(function(c) { now[c.id] = { status: c.status.type, alarmEligible: c.alarmEligible === true }; });
       Object.keys(now).forEach(function(id) {
         var prev = window.lastStatuses[id];
-        if (prev && prev !== now[id]) {
-          if (now[id] === 'failed' && errors) beep(880, 0.5);
-          else if (now[id] === 'user_response' && users) beep(660, 0.3);
-          else if (now[id] === 'closed' && jobsDone) beep(520, 0.3);
+        if (prev && prev.status !== now[id].status) {
+          if (now[id].status === 'failed' && errors) beep(880, 0.5);
+          else if (now[id].status === 'user_response' && now[id].alarmEligible && users) beep(660, 0.3);
+          else if (now[id].status === 'closed' && jobsDone) beep(520, 0.3);
         }
       });
       window.lastStatuses = now;
@@ -1478,11 +1454,12 @@ function startServer() {
               rawTitle = current.title;
             }
 
+            const incomingStatus = data.status === 'user_response' && data.alarmEligible !== true ? 'waiting' : data.status;
             const prevStatus = current ? current.status : null;
-            const isStatusChanged = prevStatus !== data.status;
+            const isStatusChanged = prevStatus !== incomingStatus;
             const statusChangedAt = isStatusChanged ? now : (current ? current.statusChangedAt : now);
             const runningSince = (() => {
-              if (data.status === 'running') {
+              if (incomingStatus === 'running') {
                 if (prevStatus === 'running' && current && current.runningSince) return current.runningSince;
                 return now;
               }
@@ -1490,7 +1467,7 @@ function startServer() {
             })();
             const lastRuntimeMs = (() => {
               if (!current) return 0;
-              if (prevStatus === 'running' && data.status !== 'running') {
+              if (prevStatus === 'running' && incomingStatus !== 'running') {
                 const startedAt = current.runningSince || current.statusChangedAt || current.startTime || now;
                 return Math.max(0, now - startedAt);
               }
@@ -1534,7 +1511,8 @@ function startServer() {
               agent: data.agent || (current ? current.agent : 'Build'),
               model: data.model || (current ? current.model : 'Claude Haiku 4.5'),
               parentId: validParentId,
-              status: data.status,
+              status: incomingStatus,
+              alarmEligible: incomingStatus === 'user_response' && data.alarmEligible === true,
               startTime: current ? current.startTime : now,
               statusChangedAt: statusChangedAt,
               closedAt: null,
