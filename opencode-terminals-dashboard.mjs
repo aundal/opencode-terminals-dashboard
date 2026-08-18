@@ -926,8 +926,20 @@ function startServer() {
     function labelData(id) {
       var value = window.dashboardLabels[id];
       if (!value) return null;
-      if (typeof value === 'string') return { text: value, color: null };
+      if (typeof value !== 'object') return null;
       return { text: value.text || '', color: value.color || 'blue' };
+    }
+    function existingLabels() {
+      var seen = {};
+      var labels = [];
+      Object.keys(window.dashboardLabels).forEach(function(id) {
+        var data = labelData(id);
+        if (!data || !data.text || seen[data.text]) return;
+        seen[data.text] = true;
+        labels.push(data);
+      });
+      labels.sort(function(a, b) { return a.text.localeCompare(b.text); });
+      return labels;
     }
     function getLabel(id) {
       var data = labelData(id);
@@ -945,6 +957,11 @@ function startServer() {
       var text = getLabel(id);
       if (!text || labelColors.indexOf(color) === -1) return;
       window.dashboardLabels[id] = { text: text, color: color };
+      try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e) {}
+    }
+    function setExistingLabel(id, data) {
+      if (!data || !data.text) return;
+      window.dashboardLabels[id] = { text: data.text, color: data.color || 'blue' };
       try { localStorage.setItem('dashboardLabels', JSON.stringify(window.dashboardLabels)); } catch(e) {}
     }
 
@@ -972,6 +989,21 @@ function startServer() {
       clearBtn.textContent = 'Remove label';
       clearBtn.onclick = function() { setLabel(id, null); refresh(); closeMenu(); };
       menu.appendChild(setBtn);
+      var labels = existingLabels();
+      if (labels.length > 0) {
+        var labelsTitle = document.createElement('div');
+        labelsTitle.className = 'context-menu-title';
+        labelsTitle.textContent = 'Labels';
+        menu.appendChild(labelsTitle);
+        labels.forEach(function(data) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'label-pick label-' + data.color;
+          btn.textContent = data.text;
+          btn.onclick = function() { setExistingLabel(id, data); refresh(); closeMenu(); };
+          menu.appendChild(btn);
+        });
+      }
       if (getLabel(id)) {
         var colorTitle = document.createElement('div');
         colorTitle.className = 'context-menu-title';
@@ -1174,7 +1206,7 @@ function startServer() {
         '</div>' +
         todosHTML(c) +
         subAgentsHTML +
-        (compact ? '' : '<div class="card-footer">Session ID: ' + shortId(c.id) + '</div>') +
+        (compact ? '' : '<div class="card-footer">Session ID: ' + esc(c.id) + '</div>') +
       '</div>';
     }
 
@@ -1431,7 +1463,7 @@ function startServer() {
     .settings-row-label { color: #cbd5e1; font-size: 0.82rem; }
     .grouped-grid { display: flex; flex-direction: column; gap: 18px; }
     .group-box { border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 12px 16px 16px; background: #172033; }
-    .group-header { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
+    .group-header { display: inline-flex; align-items: center; gap: 6px; margin-top: -14px; margin-bottom: 12px; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
     .group-header.label-group { font-size: calc(0.72rem + 2px); }
     .group-body.collapsed { display: none; }
     .group-white { border-left-color: #f3f4f6; }

@@ -22,7 +22,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Auto folding** — toggle TODO and sub-agent accordion auto folding from the gear menu
 - **Info modes** — *Compact*, *Normal* and *Extended* (cost, tokens, msgs, compactions)
 - **Grouping** — group by status, label or no grouping
-- **Label colors** — choose from 10 premade label colors from the right-click label menu
+- **Label colors** — choose from 10 premade colors or reuse existing labels from the right-click label menu
 - **Alarm sounds** — Web Audio beeps on selected status transitions
 - **Auto-start & auto-kill server** — spawned on demand by the first opencode terminal, exits 30s after the last terminal closes
 - **Session replacement cleanup** — when `/new` creates a replacement session, the old conversation is removed from the live dashboard
