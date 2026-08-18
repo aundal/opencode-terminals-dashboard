@@ -1103,17 +1103,95 @@ function startServer() {
       '</div>';
     }
 
+    function cardHTML(c, mode) {
+      var compact = mode === 'compact';
+      var isOpen = window.openStates[c.id] === true;
+      var openAttr = isOpen ? ' open' : '';
+      var badgeTitle = statusTitle(c);
+
+      var subAgentsHTML = (c.subAgents && c.subAgents.length > 0)
+        ? '<div class="sub-agents-container">' +
+            '<details data-card-id="' + c.id + '" class="sub-agents-details"' + openAttr + '>' +
+              '<summary class="sub-agents-summary">' +
+                '<span class="chevron">&#9654;</span> ACTIVE SUB-AGENTS (' + c.subAgents.length + '):' +
+              '</summary>' +
+              '<div class="sub-agents-list">' +
+                c.subAgents.map(function(sub) { return renderSubAgent(sub, mode); }).join('') +
+              '</div>' +
+            '</details>' +
+          '</div>'
+        : '';
+
+      return '<div class="card status-' + c.status.color + '" data-session-id="' + c.id + '">' +
+        '<div class="card-header">' +
+          '<div class="session-title">' + esc(c.title) + labelBadge(c.id) + '</div>' +
+          '<div class="subtitle-row">' +
+            '<span class="session-subtitle">' + esc(c.agent) + ' (' + esc(c.model) + ')</span>' +
+            '<span class="badge badge-' + c.status.color + '"' + (badgeTitle ? ' title="' + esc(badgeTitle) + '"' : '') + '>' + c.status.label + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="card-body">' +
+          '<div class="time-compact">' + metaLine(c, mode === 'extended', compact) + '</div>' +
+        '</div>' +
+        todosHTML(c) +
+        subAgentsHTML +
+        (compact ? '' : '<div class="card-footer">Session ID: ' + shortId(c.id) + '</div>') +
+      '</div>';
+    }
+
+    function statusGroup(c) {
+      var type = c.status && c.status.type;
+      if (type === 'failed' || type === 'interrupted' || type === 'retrying') return 'Error';
+      if (type === 'user_response' || type === 'asking_parent') return 'User Request';
+      if (type === 'running') return 'Running';
+      if (type === 'waiting') return 'Waiting';
+      if (type === 'closed') return 'Closed';
+      return 'Unknown';
+    }
+
+    function groupedHTML(cards, mode, grouping) {
+      if (grouping === 'none') return cards.map(function(c) { return cardHTML(c, mode); }).join('');
+
+      var groups = [];
+      if (grouping === 'label') {
+        var hasLabels = cards.some(function(c) { return !!getLabel(c.id); });
+        if (!hasLabels) return cards.map(function(c) { return cardHTML(c, mode); }).join('');
+        var labelMap = {};
+        cards.forEach(function(c) {
+          var key = getLabel(c.id) || 'Unlabeled';
+          if (!labelMap[key]) labelMap[key] = [];
+          labelMap[key].push(c);
+        });
+        Object.keys(labelMap).sort(function(a, b) {
+          if (a === 'Unlabeled') return 1;
+          if (b === 'Unlabeled') return -1;
+          return a.localeCompare(b);
+        }).forEach(function(label) { groups.push({ label: label, cards: labelMap[label] }); });
+      } else if (grouping === 'status') {
+        ['Error', 'User Request', 'Running', 'Waiting', 'Closed', 'Unknown'].forEach(function(label) {
+          var items = cards.filter(function(c) { return statusGroup(c) === label; });
+          if (items.length) groups.push({ label: label, cards: items });
+        });
+      }
+
+      return groups.map(function(group) {
+        return '<section class="group-box">' +
+          '<div class="group-label">' + esc(group.label) + '</div>' +
+          '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode); }).join('') + '</div>' +
+        '</section>';
+      }).join('');
+    }
+
     function render(cards) {
       var container = document.getElementById('grid');
-      var mode = document.getElementById('infoMode').value;
-      var extended = mode === 'extended';
-      var compact = mode === 'compact';
+      var mode = localStorage.getItem('dashboardInfoMode') || 'standard';
+      var grouping = localStorage.getItem('dashboardGrouping') || 'none';
       var q = document.getElementById('filterInput').value.trim().toLowerCase();
 
       checkAlarms(cards,
-        document.getElementById('alarmJobsDone').value === 'yes',
-        document.getElementById('alarmErrors').value === 'yes',
-        document.getElementById('alarmUsers').value === 'yes');
+        localStorage.getItem('dashboardAlarmJobsDone') === 'yes',
+        localStorage.getItem('dashboardAlarmErrors') === 'yes',
+        localStorage.getItem('dashboardAlarmUsers') === 'yes');
 
       // Preserve open/closed state of accordion elements across 1-second auto-refreshes
       document.querySelectorAll('.sub-agents-details[data-card-id], .todos-details[data-card-id]').forEach(function(el) {
@@ -1131,6 +1209,7 @@ function startServer() {
       }
 
       if (!cards || cards.length === 0) {
+        container.className = 'grid';
         container.innerHTML = '<div class="offline-box">' +
           '<div class="offline-title">No open OpenCode terminals detected.</div>' +
           '<div class="offline-tip">Open a terminal window and run opencode to see live session status.</div>' +
@@ -1138,59 +1217,61 @@ function startServer() {
         return;
       }
 
-      var html = cards.map(function(c) {
-        var isOpen = window.openStates[c.id] === true;
-        var openAttr = isOpen ? ' open' : '';
-        var badgeTitle = statusTitle(c);
-
-        var subAgentsHTML = (c.subAgents && c.subAgents.length > 0)
-          ? '<div class="sub-agents-container">' +
-              '<details data-card-id="' + c.id + '" class="sub-agents-details"' + openAttr + '>' +
-                '<summary class="sub-agents-summary">' +
-                  '<span class="chevron">&#9654;</span> ACTIVE SUB-AGENTS (' + c.subAgents.length + '):' +
-                '</summary>' +
-                '<div class="sub-agents-list">' +
-                  c.subAgents.map(function(sub) { return renderSubAgent(sub, mode); }).join('') +
-                '</div>' +
-              '</details>' +
-            '</div>'
-          : '';
-
-        return '<div class="card status-' + c.status.color + '" data-session-id="' + c.id + '">' +
-          '<div class="card-header">' +
-            '<div class="session-title">' + esc(c.title) + labelBadge(c.id) + '</div>' +
-            '<div class="subtitle-row">' +
-              '<span class="session-subtitle">' + esc(c.agent) + ' (' + esc(c.model) + ')</span>' +
-              '<span class="badge badge-' + c.status.color + '"' + (badgeTitle ? ' title="' + esc(badgeTitle) + '"' : '') + '>' + c.status.label + '</span>' +
-            '</div>' +
-          '</div>' +
-          '<div class="card-body">' +
-            '<div class="time-compact">' + metaLine(c, extended, compact) + '</div>' +
-          '</div>' +
-          todosHTML(c) +
-          subAgentsHTML +
-          (compact ? '' : '<div class="card-footer">Session ID: ' + shortId(c.id) + '</div>') +
-        '</div>';
-      }).join('');
-
+      var html = groupedHTML(cards, mode, grouping);
+      container.className = grouping === 'none' || html.indexOf('group-box') === -1 ? 'grid' : 'grouped-grid';
       container.innerHTML = html;
     }
 
     function loadSettings() {
-      var infoMode = document.getElementById('infoMode');
-      var savedInfo = localStorage.getItem('dashboardInfoMode');
-      if (savedInfo) infoMode.value = savedInfo;
-      infoMode.addEventListener('change', function() { localStorage.setItem('dashboardInfoMode', infoMode.value); refresh(); });
-      [
-        ['alarmJobsDone', 'dashboardAlarmJobsDone'],
-        ['alarmErrors', 'dashboardAlarmErrors'],
-        ['alarmUsers', 'dashboardAlarmUsers']
-      ].forEach(function(pair) {
-        var sel = document.getElementById(pair[0]);
-        var saved = localStorage.getItem(pair[1]);
-        if (saved) sel.value = saved;
-        sel.addEventListener('change', function() { localStorage.setItem(pair[1], sel.value); });
+      if (!localStorage.getItem('dashboardInfoMode')) localStorage.setItem('dashboardInfoMode', 'standard');
+      if (!localStorage.getItem('dashboardGrouping')) localStorage.setItem('dashboardGrouping', 'none');
+      [['dashboardAlarmJobsDone', 'no'], ['dashboardAlarmErrors', 'no'], ['dashboardAlarmUsers', 'no']].forEach(function(pair) {
+        if (!localStorage.getItem(pair[0])) localStorage.setItem(pair[0], pair[1]);
       });
+
+      function updateMenuState() {
+        document.querySelectorAll('[data-setting][data-value]').forEach(function(btn) {
+          var setting = btn.getAttribute('data-setting');
+          var value = btn.getAttribute('data-value');
+          btn.classList.toggle('active', localStorage.getItem(setting) === value);
+        });
+        document.querySelectorAll('[data-toggle]').forEach(function(btn) {
+          var key = btn.getAttribute('data-toggle');
+          var on = localStorage.getItem(key) === 'yes';
+          btn.classList.toggle('active', on);
+          btn.textContent = on ? 'ON' : 'OFF';
+        });
+      }
+
+      document.querySelectorAll('[data-setting][data-value]').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          localStorage.setItem(btn.getAttribute('data-setting'), btn.getAttribute('data-value'));
+          updateMenuState();
+          refresh();
+        });
+      });
+      document.querySelectorAll('[data-toggle]').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var key = btn.getAttribute('data-toggle');
+          localStorage.setItem(key, localStorage.getItem(key) === 'yes' ? 'no' : 'yes');
+          updateMenuState();
+          refresh();
+        });
+      });
+
+      var settingsMenu = document.getElementById('settingsMenu');
+      var settingsWrap = document.getElementById('settingsWrap');
+      var settingsButton = document.getElementById('settingsButton');
+      function openSettings() { settingsMenu.classList.add('open'); }
+      function closeSettings() { settingsMenu.classList.remove('open'); }
+      settingsButton.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); openSettings(); });
+      settingsWrap.addEventListener('mouseenter', openSettings);
+      settingsWrap.addEventListener('mouseleave', closeSettings);
+      updateMenuState();
       document.getElementById('filterInput').addEventListener('input', refresh);
     }
 
@@ -1243,21 +1324,30 @@ function startServer() {
     .context-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: #f8fafc; padding: 6px 10px; font-size: 0.8rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; border-radius: 4px; }
     .context-menu button:hover { background: #334155; }
 
-    .controls { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
-    .controls input, .controls select {
+    .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; flex-wrap: nowrap; position: relative; }
+    .controls input {
       background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 6px;
       padding: 8px 12px; font-size: 0.85rem; font-family: system-ui, -apple-system, sans-serif;
     }
     .controls input { flex: 1; min-width: 180px; }
     .controls input::placeholder { color: #64748b; }
-    .controls select { cursor: pointer; }
-    .controls select:hover { border-color: #475569; }
-
-    .alarm-section { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 6px 12px; }
-    .alarm-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-right: 4px; }
-    .alarm-section label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #cbd5e1; }
-    .alarm-section select { background: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; font-size: 0.8rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; }
-    .alarm-section select:hover { border-color: #475569; }
+    .settings-wrap { position: relative; flex: 0 0 auto; }
+    .settings-button { width: 38px; height: 38px; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: #cbd5e1; font-size: 1.1rem; cursor: pointer; }
+    .settings-button:hover { border-color: #475569; color: #f8fafc; }
+    .settings-menu { display: none; position: absolute; right: 0; top: 44px; z-index: 1000; min-width: 260px; background: #111827; border: 1px solid #334155; border-radius: 8px; box-shadow: 0 12px 28px rgba(0,0,0,0.45); padding: 12px; }
+    .settings-menu.open { display: block; }
+    .settings-section + .settings-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; }
+    .settings-heading { color: #94a3b8; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 7px; }
+    .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+    .settings-options { display: flex; gap: 6px; flex-wrap: wrap; }
+    .settings-option, .settings-toggle { border: 1px solid #334155; background: #0f172a; color: #cbd5e1; border-radius: 6px; padding: 5px 8px; font-size: 0.78rem; font-family: system-ui, -apple-system, sans-serif; cursor: pointer; }
+    .settings-option:hover, .settings-toggle:hover { border-color: #475569; color: #f8fafc; }
+    .settings-option.active, .settings-toggle.active { background: #38bdf8; border-color: #38bdf8; color: #082f49; font-weight: 700; }
+    .settings-row-label { color: #cbd5e1; font-size: 0.82rem; }
+    .grouped-grid { display: flex; flex-direction: column; gap: 18px; }
+    .group-box { position: relative; border: 1px solid #334155; border-left: 4px solid #7dd3fc; border-radius: 10px; padding: 16px 16px 16px 24px; background: rgba(15, 23, 42, 0.45); }
+    .group-label { position: absolute; left: -1px; top: 14px; transform: translateX(-50%) rotate(-90deg); transform-origin: center; background: #0f172a; color: #7dd3fc; border: 1px solid #334155; border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+    .group-cards { margin-left: 8px; }
 
     .card-footer { margin-top: auto; padding-top: 10px; font-size: 0.7rem; color: #64748b; border-top: 1px solid #334155; }
     
@@ -1332,16 +1422,32 @@ function startServer() {
   <h1>OpenCode Active Terminals Dashboard</h1>
   <div class="controls">
     <input id="filterInput" type="text" placeholder="Filter: title, agent, status..." />
-    <select id="infoMode">
-      <option value="compact">Compact</option>
-      <option value="standard">Standard</option>
-      <option value="extended">Extended</option>
-    </select>
-    <div class="alarm-section">
-      <span class="alarm-title">Alarms</span>
-      <label>Jobs done: <select id="alarmJobsDone"><option value="no">No</option><option value="yes">Yes</option></select></label>
-      <label>Errors: <select id="alarmErrors"><option value="no">No</option><option value="yes">Yes</option></select></label>
-      <label>User requests: <select id="alarmUsers"><option value="no">No</option><option value="yes">Yes</option></select></label>
+    <div id="settingsWrap" class="settings-wrap">
+      <button id="settingsButton" class="settings-button" type="button" title="Dashboard settings">&#9881;</button>
+      <div id="settingsMenu" class="settings-menu">
+        <div class="settings-section">
+          <div class="settings-heading">View</div>
+          <div class="settings-options">
+            <button class="settings-option" type="button" data-setting="dashboardInfoMode" data-value="compact">Compact</button>
+            <button class="settings-option" type="button" data-setting="dashboardInfoMode" data-value="standard">Normal</button>
+            <button class="settings-option" type="button" data-setting="dashboardInfoMode" data-value="extended">Extended</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-heading">Grouping</div>
+          <div class="settings-options">
+            <button class="settings-option" type="button" data-setting="dashboardGrouping" data-value="status">Status</button>
+            <button class="settings-option" type="button" data-setting="dashboardGrouping" data-value="label">Label</button>
+            <button class="settings-option" type="button" data-setting="dashboardGrouping" data-value="none">None</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-heading">Alarms</div>
+          <div class="settings-row"><span class="settings-row-label">Jobs</span><button class="settings-toggle" type="button" data-toggle="dashboardAlarmJobsDone">OFF</button></div>
+          <div class="settings-row"><span class="settings-row-label">User request</span><button class="settings-toggle" type="button" data-toggle="dashboardAlarmUsers">OFF</button></div>
+          <div class="settings-row"><span class="settings-row-label">Errors</span><button class="settings-toggle" type="button" data-toggle="dashboardAlarmErrors">OFF</button></div>
+        </div>
+      </div>
     </div>
   </div>
   <div id="content">

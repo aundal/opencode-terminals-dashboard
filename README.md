@@ -18,8 +18,10 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Msg/Compaction counters** — message and compaction counts per session; parent message counts always show sub-agent messages in parentheses
 - **Todos** — collapsible TODOS accordion with per-item status icons (pending / in_progress / completed / cancelled)
 - **Filter** — filter cards by title, agent or status
-- **Info modes** — *Standard* (clean) vs *Udvidet* (cost, tokens, msgs, compactions)
-- **Alarm sounds** — Web Audio beeps on status transitions: off / errors / errors + user responses
+- **Gear menu** — view mode, grouping mode and alarm toggles next to search
+- **Info modes** — *Compact*, *Normal* and *Extended* (cost, tokens, msgs, compactions)
+- **Grouping** — group by status, label or no grouping
+- **Alarm sounds** — Web Audio beeps on selected status transitions
 - **Auto-start & auto-kill server** — spawned on demand by the first opencode terminal, exits 30s after the last terminal closes
 - **Session replacement cleanup** — when `/new` creates a replacement session, the old conversation is removed from the live dashboard
 - **Self-healing** — if the server dies, running terminals respawn it and immediately resync all sessions

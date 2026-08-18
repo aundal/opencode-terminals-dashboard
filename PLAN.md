@@ -21,3 +21,5 @@
 - Extended parent messages always show total plus direct sub-agent contribution in parentheses.
 - Running sessions decay to Waiting (Idle) after 30 seconds without activity.
 - Resumed sessions show usage observed after the plugin sees the session, not old persisted OpenCode totals.
+- Dashboard settings live in a gear menu beside search: view mode, grouping and alarm toggles.
+- Grouping supports None, Label and Status. Status order is Error, User Request, Running, Waiting, Closed, Unknown.
