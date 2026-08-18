@@ -26,3 +26,5 @@
 - Group boxes use a lighter background than the page and reuse status colors for group labels.
 - Top-level sessions do not decay from Running to Waiting; only explicit OpenCode idle events can do that.
 - Label colors are stored per label with backwards compatibility for older string labels.
+- Gear menu includes Auto Folding toggles for TODO and AGENTS accordions.
+- Group headers are displayed at the top of group boxes and can be clicked to fold/unfold groups.

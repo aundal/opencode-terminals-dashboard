@@ -1069,7 +1069,8 @@ function startServer() {
     function todosHTML(c) {
       if (!c.todos || c.todos.length === 0) return '';
       var done = c.todos.filter(function(t) { return t.status === 'completed'; }).length;
-      var isOpen = window.openStates['todo-' + c.id] === true;
+      var autoFoldTodos = localStorage.getItem('dashboardAutoFoldTodos') !== 'no';
+      var isOpen = autoFoldTodos ? window.openStates['todo-' + c.id] === true : true;
       var openAttr = isOpen ? ' open' : '';
       var items = c.todos.map(function(t) {
         return '<div class="todo-row" style="color:' + todoColor(t.status) + '">' +
@@ -1142,7 +1143,8 @@ function startServer() {
 
     function cardHTML(c, mode) {
       var compact = mode === 'compact';
-      var isOpen = window.openStates[c.id] === true;
+      var autoFoldAgents = localStorage.getItem('dashboardAutoFoldAgents') !== 'no';
+      var isOpen = autoFoldAgents ? window.openStates[c.id] === true : true;
       var openAttr = isOpen ? ' open' : '';
       var badgeTitle = statusTitle(c);
 
@@ -1226,9 +1228,15 @@ function startServer() {
       }
 
       return groups.map(function(group) {
+        var groupKey = 'group-' + grouping + '-' + group.label;
+        var isOpen = window.openStates[groupKey] !== false;
         return '<section class="group-box group-' + esc(group.color) + '">' +
-          '<div class="group-label' + (group.labelGroup ? ' label-group' : '') + '">' + esc(group.label) + '</div>' +
-          '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode); }).join('') + '</div>' +
+          '<button type="button" class="group-header' + (group.labelGroup ? ' label-group' : '') + '" data-group-key="' + esc(groupKey) + '">' +
+            '<span class="chevron">' + (isOpen ? '&#9660;' : '&#9654;') + '</span> ' + esc(group.label) +
+          '</button>' +
+          '<div class="group-body' + (isOpen ? '' : ' collapsed') + '">' +
+            '<div class="group-cards grid">' + group.cards.map(function(c) { return cardHTML(c, mode); }).join('') + '</div>' +
+          '</div>' +
         '</section>';
       }).join('');
     }
@@ -1276,7 +1284,7 @@ function startServer() {
     function loadSettings() {
       if (!localStorage.getItem('dashboardInfoMode')) localStorage.setItem('dashboardInfoMode', 'standard');
       if (!localStorage.getItem('dashboardGrouping')) localStorage.setItem('dashboardGrouping', 'none');
-      [['dashboardAlarmJobsDone', 'no'], ['dashboardAlarmErrors', 'no'], ['dashboardAlarmUsers', 'no']].forEach(function(pair) {
+      [['dashboardAlarmJobsDone', 'no'], ['dashboardAlarmErrors', 'no'], ['dashboardAlarmUsers', 'no'], ['dashboardAutoFoldTodos', 'yes'], ['dashboardAutoFoldAgents', 'yes']].forEach(function(pair) {
         if (!localStorage.getItem(pair[0])) localStorage.setItem(pair[0], pair[1]);
       });
 
@@ -1327,6 +1335,13 @@ function startServer() {
       settingsButton.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); openSettings(); });
       settingsWrap.addEventListener('mouseenter', openSettings);
       settingsWrap.addEventListener('mouseleave', scheduleCloseSettings);
+      document.getElementById('grid').addEventListener('click', function(e) {
+        var header = e.target.closest ? e.target.closest('.group-header[data-group-key]') : null;
+        if (!header) return;
+        var key = header.getAttribute('data-group-key');
+        window.openStates[key] = window.openStates[key] === false;
+        refresh();
+      });
       updateMenuState();
       document.getElementById('filterInput').addEventListener('input', refresh);
     }
@@ -1415,31 +1430,32 @@ function startServer() {
     .settings-option.active, .settings-toggle.active { background: #38bdf8; border-color: #38bdf8; color: #082f49; font-weight: 700; }
     .settings-row-label { color: #cbd5e1; font-size: 0.82rem; }
     .grouped-grid { display: flex; flex-direction: column; gap: 18px; }
-    .group-box { position: relative; border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 16px 16px 16px 24px; background: #172033; }
-    .group-label { position: absolute; left: -1px; top: 14px; transform: translateX(-50%) rotate(-90deg); transform-origin: center; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
-    .group-label.label-group { font-size: calc(0.72rem + 2px); }
+    .group-box { border: 1px solid #334155; border-left: 4px solid #f3f4f6; border-radius: 10px; padding: 12px 16px 16px; background: #172033; }
+    .group-header { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; background: #f3f4f6; color: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; cursor: pointer; }
+    .group-header.label-group { font-size: calc(0.72rem + 2px); }
+    .group-body.collapsed { display: none; }
     .group-white { border-left-color: #f3f4f6; }
-    .group-white .group-label { background: #f3f4f6; color: #0f172a; }
+    .group-white .group-header { background: #f3f4f6; color: #0f172a; }
     .group-green { border-left-color: #22c55e; }
-    .group-green .group-label { background: #22c55e; color: #052e16; }
+    .group-green .group-header { background: #22c55e; color: #052e16; }
     .group-red { border-left-color: #ef4444; }
-    .group-red .group-label { background: #ef4444; color: #450a0a; }
+    .group-red .group-header { background: #ef4444; color: #450a0a; }
     .group-yellow { border-left-color: #eab308; }
-    .group-yellow .group-label { background: #eab308; color: #422006; }
+    .group-yellow .group-header { background: #eab308; color: #422006; }
     .group-orange { border-left-color: #f97316; }
-    .group-orange .group-label { background: #f97316; color: #431407; }
+    .group-orange .group-header { background: #f97316; color: #431407; }
     .group-skyblue { border-left-color: #38bdf8; }
-    .group-skyblue .group-label { background: #38bdf8; color: #082f49; }
+    .group-skyblue .group-header { background: #38bdf8; color: #082f49; }
     .group-gray { border-left-color: #64748b; }
-    .group-gray .group-label { background: #64748b; color: #f8fafc; }
+    .group-gray .group-header { background: #64748b; color: #f8fafc; }
     .group-blue { border-left-color: #38bdf8; }
-    .group-blue .group-label { background: #38bdf8; color: #082f49; }
+    .group-blue .group-header { background: #38bdf8; color: #082f49; }
     .group-purple { border-left-color: #a855f7; }
-    .group-purple .group-label { background: #a855f7; color: #2e1065; }
+    .group-purple .group-header { background: #a855f7; color: #2e1065; }
     .group-pink { border-left-color: #ec4899; }
-    .group-pink .group-label { background: #ec4899; color: #500724; }
+    .group-pink .group-header { background: #ec4899; color: #500724; }
     .group-cyan { border-left-color: #06b6d4; }
-    .group-cyan .group-label { background: #06b6d4; color: #083344; }
+    .group-cyan .group-header { background: #06b6d4; color: #083344; }
     .group-cards { margin-left: 8px; }
 
     .card-footer { margin-top: auto; padding-top: 10px; font-size: 0.7rem; color: #64748b; border-top: 1px solid #334155; }
@@ -1539,6 +1555,11 @@ function startServer() {
           <div class="settings-row"><span class="settings-row-label">Jobs</span><button class="settings-toggle" type="button" data-toggle="dashboardAlarmJobsDone">OFF</button></div>
           <div class="settings-row"><span class="settings-row-label">User request</span><button class="settings-toggle" type="button" data-toggle="dashboardAlarmUsers">OFF</button></div>
           <div class="settings-row"><span class="settings-row-label">Errors</span><button class="settings-toggle" type="button" data-toggle="dashboardAlarmErrors">OFF</button></div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-heading">Auto Folding</div>
+          <div class="settings-row"><span class="settings-row-label">TODOS</span><button class="settings-toggle" type="button" data-toggle="dashboardAutoFoldTodos">ON</button></div>
+          <div class="settings-row"><span class="settings-row-label">AGENTS</span><button class="settings-toggle" type="button" data-toggle="dashboardAutoFoldAgents">ON</button></div>
         </div>
       </div>
     </div>

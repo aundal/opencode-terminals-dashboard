@@ -19,6 +19,7 @@ Tracks every opencode terminal in your network and shows its sessions as live ca
 - **Todos** — collapsible TODOS accordion with per-item status icons (pending / in_progress / completed / cancelled)
 - **Filter** — filter cards by title, agent or status
 - **Gear menu** — view mode, grouping mode and alarm toggles next to search
+- **Auto folding** — toggle TODO and sub-agent accordion auto folding from the gear menu
 - **Info modes** — *Compact*, *Normal* and *Extended* (cost, tokens, msgs, compactions)
 - **Grouping** — group by status, label or no grouping
 - **Label colors** — choose from 10 premade label colors from the right-click label menu
