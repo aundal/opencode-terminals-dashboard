@@ -850,6 +850,10 @@ function startServer() {
     return card;
   }
 
+  function hasInProgressTodo(card) {
+    return Array.isArray(card.todos) && card.todos.some(t => t && t.status === 'in_progress');
+  }
+
   function getCards() {
     const now = Date.now();
     const sessionCardsMap = new Map();
@@ -869,8 +873,9 @@ function startServer() {
       }
     }
 
-    // Parent cards include their direct sub-agent usage and stay running while sub-agents are active.
+    // Parent cards include their direct sub-agent usage and stay running while active work is tracked.
     for (const card of rootCards) {
+      let hasActiveSubAgent = false;
       if (card.subAgents && card.subAgents.length > 0) {
         let subAgentCostValue = 0;
         let subAgentTokensValue;
@@ -890,12 +895,12 @@ function startServer() {
         card.msgCount = (card.msgCount || 0) + subAgentMsgCount;
         applyFormattedMetrics(card);
 
-        const hasActiveSubAgent = card.subAgents.some(sub => sub.status.type === 'running' || sub.status.type === 'asking_parent');
-        if (hasActiveSubAgent && card.status.type !== 'closed') {
-          card.status = parseStatusInfo('running');
-          card.waitingTime = null;
-          card.isCacheCold = false;
-        }
+        hasActiveSubAgent = card.subAgents.some(sub => sub.status.type === 'running' || sub.status.type === 'asking_parent' || hasInProgressTodo(sub));
+      }
+      if ((hasActiveSubAgent || hasInProgressTodo(card)) && card.status.type !== 'closed' && card.status.type !== 'interrupted') {
+        card.status = parseStatusInfo('running');
+        card.waitingTime = null;
+        card.isCacheCold = false;
       }
     }
 
