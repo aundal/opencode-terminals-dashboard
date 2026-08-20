@@ -11,7 +11,7 @@ import process from 'process';
 const DASHBOARD_PORT = 31337;
 const LEASE_PORT = 31338;
 const HEARTBEAT_URL = `http://127.0.0.1:${DASHBOARD_PORT}/api/heartbeat`;
-const RUNNING_DECAY_MS = 30000;
+const RUNNING_DECAY_MS = 10 * 60 * 1000;
 const STALE_SUBAGENT_PRUNE_MS = 30000;
 const STALE_HEARTBEAT_PURGE_MS = 15000;
 const CLOSED_SESSION_RETENTION_MS = 15000;
@@ -302,7 +302,8 @@ function isQuestionOrPermissionEvent(event) {
 // ====================================================================
 function setupPlugin(ctx) {
   const sessions = new Map();
-  const knownParents = new Map();
+const knownParents = new Map();
+  const activeToolCalls = new Map();
   let rootSessionId = null;
   let activeTopLevelSessionId = null;
   let heartbeatTimer = null;
@@ -414,8 +415,9 @@ function setupPlugin(ctx) {
 
     const lastTime = globalSessionThrottles.get(s.sessionId) || 0;
     const lastState = globalSessionLastState.get(s.sessionId) || {};
+    const reportStatus = hasActiveToolCalls(s.sessionId) ? 'running' : s.status;
 
-    const statusChanged = s.status !== lastState.status;
+    const statusChanged = reportStatus !== lastState.status;
     const titleChanged = s.title !== lastState.title;
     const tokensChanged = tokenFingerprint(s.tokens) !== lastState.tokens;
     const timeElapsed = now - lastTime;
@@ -431,7 +433,7 @@ function setupPlugin(ctx) {
     }
 
     globalSessionThrottles.set(s.sessionId, now);
-    globalSessionLastState.set(s.sessionId, { status: s.status, title: s.title, tokens: tokenFingerprint(s.tokens) });
+globalSessionLastState.set(s.sessionId, { status: reportStatus, title: s.title, tokens: tokenFingerprint(s.tokens) });
 
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -442,8 +444,8 @@ function setupPlugin(ctx) {
         body: JSON.stringify({
           sessionId: s.sessionId,
           parentId: s.parentId,
-          remove: s.remove === true,
-          status: s.status,
+remove: s.remove === true,
+          status: reportStatus,
           alarmEligible: s.alarmEligible === true,
           title: s.title,
           agent: s.agent,
@@ -479,8 +481,8 @@ function setupPlugin(ctx) {
     for (const [id, s] of sessions.entries()) {
       const inactiveMs = now - s.lastActivityTime;
 
-      // Quiet sub-agents can decay; top-level sessions should trust explicit OpenCode idle events.
-      if (s.parentId && s.status === 'running' && inactiveMs > RUNNING_DECAY_MS) {
+// Long-running shell/tool calls can be silent for minutes; only decay quiet sub-agents.
+      if (!hasActiveToolCalls(id) && s.parentId && s.status === 'running' && inactiveMs > RUNNING_DECAY_MS) {
         s.status = s.waitingForUser ? 'user_response' : 'waiting';
       }
 
@@ -695,6 +697,64 @@ function setupPlugin(ctx) {
     }
   };
 
+  function hasActiveToolCalls(sessionId) {
+    return activeToolCalls.get(sessionId)?.size > 0;
+  }
+
+  function ensureToolSession(sessionId, now) {
+    let s = sessions.get(sessionId);
+
+    if (!s) {
+      s = {
+        sessionId: sessionId,
+        parentId: null,
+        title: 'Active Terminal',
+        agent: 'Build',
+        model: 'Claude Haiku 4.5',
+        status: 'waiting',
+        waitingForUser: false,
+        lastActivityTime: now
+      };
+      sessions.set(sessionId, s);
+    }
+
+    s.waitingForUser = false;
+    s.error = null;
+    s.lastActivityTime = now;
+
+    if (!s.parentId) rootSessionId = sessionId;
+    if (!heartbeatTimer) heartbeatTimer = setInterval(() => sendAllReports(), 2500);
+
+    return s;
+  }
+
+  async function markToolSessionStarted(input) {
+    if (!isSessionId(input?.sessionID)) return;
+
+    const now = Date.now();
+    const callId = typeof input.callID === 'string' && input.callID ? input.callID : `call_${now}`;
+    const calls = activeToolCalls.get(input.sessionID) || new Set();
+    calls.add(callId);
+    activeToolCalls.set(input.sessionID, calls);
+
+    const s = ensureToolSession(input.sessionID, now);
+    await sendReportForSession(s, now, true);
+  }
+
+  async function markToolSessionFinished(input) {
+    if (!isSessionId(input?.sessionID)) return;
+
+    const now = Date.now();
+    const calls = activeToolCalls.get(input.sessionID);
+    if (calls && typeof input.callID === 'string') {
+      calls.delete(input.callID);
+      if (calls.size === 0) activeToolCalls.delete(input.sessionID);
+    }
+
+    const s = ensureToolSession(input.sessionID, now);
+    await sendReportForSession(s, now, true);
+  }
+
   try {
     if (ctx?.events?.on) {
       ctx.events.on('event', (event, session) => eventHandler(event, session));
@@ -707,6 +767,12 @@ function setupPlugin(ctx) {
 
   return {
     event: eventHandler,
+    "tool.execute.before": async (input) => {
+      await markToolSessionStarted(input);
+    },
+    "tool.execute.after": async (input) => {
+      await markToolSessionFinished(input);
+    },
     cleanup: () => {
       disposed = true;
       if (heartbeatTimer) clearInterval(heartbeatTimer);
