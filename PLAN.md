@@ -11,11 +11,14 @@
 
 ## Future Tasks
 - Consider clickable sub-agent rows in the sidebar.
+- Add regression test that forking never produces parentId.
 
 ## Current Behavior
+- Fork sessions (` (fork #N)` title) are always top-level and never nested as sub-agents, even if a parentId is present (fixes #3).
 - Parent cards stay Running while direct sub-agents are Running or ASKING PARENT.
 - ASKING PARENT is yellow and does not trigger the user-response alarm.
-- User-response alarms require alarmEligible=true from a verified parent prompt; guessed/legacy user_response heartbeats are displayed as Waiting (Idle).
+- Verified top-level user questions stay visible as Waiting for User Response until cleared by reply, reject, resumed work, idle, interrupt, failure, or close.
+- User-response alarms fire only once when the first verified top-level question or permission event starts a new wait cycle.
 - Aborted/cancelled/interrupted sessions stay Waiting (Interrupted) until real new work starts.
 - Extended parent cost/tokens include direct sub-agent usage without parentheses.
 - Extended parent messages always show total plus direct sub-agent contribution in parentheses.

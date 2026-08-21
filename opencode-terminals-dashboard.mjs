@@ -76,8 +76,6 @@ function findParentId(event, session) {
     else if (typeof event.properties.info?.parentID === 'string') parentId = event.properties.info.parentID;
     else if (typeof event.properties.info?.parentId === 'string') parentId = event.properties.info.parentId;
     else if (typeof event.properties.session?.parentID === 'string') parentId = event.properties.session.parentID;
-    else if (typeof event.properties.task?.parentID === 'string') parentId = event.properties.task.parentID;
-    else if (typeof event.properties.task?.parentSessionID === 'string') parentId = event.properties.task.parentSessionID;
   }
   if (!parentId && event) {
     if (typeof event.parentID === 'string') parentId = event.parentID;
@@ -114,6 +112,11 @@ function findRawSessionTitle(event, session) {
   if (session && typeof session.title === 'string' && session.title) return session.title;
   if (event && typeof event.title === 'string' && event.title) return event.title;
   return null;
+}
+
+// Fork detection: forks have title like "Something (fork #1)" and must never be nested as sub-agents
+function isForkTitle(title) {
+  return typeof title === 'string' && /\(fork #\d+\)/.test(title);
 }
 
 // Clean title: remove "(@general subagent)" or similar suffixes
@@ -479,6 +482,11 @@ remove: s.remove === true,
   async function sendAllReports(force = false) {
     const now = Date.now();
     for (const [id, s] of sessions.entries()) {
+      // New dashboard: only heartbeat the visual session per terminal + its sub-agents
+      // Hide ALL background top-level sessions (fork history, switched sessions) — returnable via Ctrl+P session list
+      if (!s.parentId && id !== activeTopLevelSessionId) {
+        continue;
+      }
       const inactiveMs = now - s.lastActivityTime;
 
 // Long-running shell/tool calls can be silent for minutes; only decay quiet sub-agents.
@@ -526,9 +534,23 @@ remove: s.remove === true,
     }
     if (!foundId) return;
 
+    const rawTitle = findRawSessionTitle(event, session);
+    const foundTitle = cleanTitle(rawTitle);
+    const foundAgent = findAgentName(event, session);
+    const foundModel = findModelName(event, session);
+    const type = (event?.type || event?.event || event?.name || '').toLowerCase();
+    const isFork = isForkTitle(foundTitle) || isForkTitle(rawTitle);
+
     let explicitParentId = findParentId(event, session);
+    // Forks must never be nested - clear any stale parent and ignore explicit parent
+    if (isFork && explicitParentId) {
+      knownParents.delete(foundId);
+      explicitParentId = null;
+    }
     if (explicitParentId) {
       knownParents.set(foundId, explicitParentId);
+    } else if (isFork) {
+      knownParents.delete(foundId);
     }
 
     if (!rootSessionId) {
@@ -538,19 +560,15 @@ remove: s.remove === true,
     }
 
     let effectiveParentId = explicitParentId || knownParents.get(foundId) || null;
-    if (effectiveParentId === foundId) {
+    if (isFork) {
+      effectiveParentId = null;
+      knownParents.delete(foundId);
+    } else if (effectiveParentId === foundId) {
       knownParents.delete(foundId);
       effectiveParentId = null;
     }
 
-    const isSubAgent = !!effectiveParentId;
-
-    const rawTitle = findRawSessionTitle(event, session);
-    const foundTitle = cleanTitle(rawTitle);
-    const foundAgent = findAgentName(event, session);
-    const foundModel = findModelName(event, session);
-
-    const type = (event?.type || event?.event || event?.name || '').toLowerCase();
+    const isSubAgent = !!effectiveParentId && !isFork;
     const rawStatus = event?.properties?.status || event?.properties?.info?.status || session?.status || '';
     const coreStatus = (typeof rawStatus === 'string' ? rawStatus : (rawStatus && typeof rawStatus.type === 'string' ? rawStatus.type : '')).toLowerCase();
 
@@ -558,6 +576,7 @@ remove: s.remove === true,
     let s = sessions.get(foundId);
 
     const isUserPrompt = isQuestionOrPermissionEvent(event);
+    const shouldTriggerUserAlarm = isUserPrompt && !isSubAgent && !(s && s.waitingForUser);
     const isInterrupt = type.includes('interrupt') || type.includes('cancel') || type.includes('abort') || coreStatus === 'interrupted' || coreStatus === 'canceled' || coreStatus === 'aborted';
 
     // DIRECT OPENCODE CORE STATE MAPPING
@@ -566,7 +585,7 @@ remove: s.remove === true,
     if (type === 'session.deleted' || type === 'session.closed' || type.includes('delete') || type.includes('close') || type.includes('end')) {
       status = 'closed';
       if (s) s.waitingForUser = false;
-    } else if (isInterrupt) {
+    } else if (isInterrupt && !isFork) {
       status = 'interrupted';
       if (s) s.waitingForUser = false;
     } else if (coreStatus === 'retry' || type.includes('retry')) {
@@ -580,7 +599,7 @@ remove: s.remove === true,
       if (s) s.waitingForUser = false;
       if (s) s.error = null;
     } else if (coreStatus === 'idle' || type === 'session.idle' || type === 'idle') {
-      status = (s && (s.status === 'interrupted' || isInterruptedError(s.error))) ? 'interrupted' : 'waiting';
+      status = (!isFork && s && (s.status === 'interrupted' || isInterruptedError(s.error))) ? 'interrupted' : 'waiting';
       if (s) s.waitingForUser = false;
     } else if (type.includes('error') || type.includes('fail') || type.includes('exception')) {
       status = 'failed';
@@ -589,7 +608,7 @@ remove: s.remove === true,
       status = 'user_response';
     }
 
-    const isSessionCreate = type === 'session.created' || type === 'session.create';
+    const isSessionCreate = type.startsWith('session.created') || type.startsWith('session.create');
 
     if (isSessionCreate && !isSubAgent && activeTopLevelSessionId && activeTopLevelSessionId !== foundId) {
       for (const [id, oldSession] of Array.from(sessions.entries())) {
@@ -612,7 +631,7 @@ remove: s.remove === true,
         model: formatModelName(foundModel),
         status: status,
         waitingForUser: isUserPrompt && !isSubAgent,
-        alarmEligible: status === 'user_response' && isUserPrompt && !isSubAgent,
+        alarmEligible: status === 'user_response' && shouldTriggerUserAlarm,
         baseCost: isSessionCreate ? 0 : undefined,
         rawCost: undefined,
         completedMessageIDs: new Set(),
@@ -629,7 +648,7 @@ remove: s.remove === true,
 
       s.lastActivityTime = now;
       s.status = status;
-      s.alarmEligible = status === 'user_response' && isUserPrompt && !isSubAgent;
+      s.alarmEligible = status === 'user_response' ? shouldTriggerUserAlarm : false;
     }
 
     // ================== Extended telemetry capture ==================
@@ -1031,7 +1050,7 @@ function startServer() {
   }
 
   function buildCardData(id, s, now) {
-    const displayStatus = s.status === 'user_response' && s.alarmEligible !== true ? 'waiting' : s.status;
+    const displayStatus = s.status;
     const visibleStatus = displayStatus === 'waiting' && isInterruptedError(s.error) ? 'interrupted' : displayStatus;
     const isWaitingState = visibleStatus === 'waiting' || visibleStatus === 'user_response' || visibleStatus === 'asking_parent' || visibleStatus === 'interrupted';
     const waitingTimeMs = isWaitingState ? (now - s.statusChangedAt) : 0;
@@ -1091,9 +1110,16 @@ function startServer() {
     const rootCards = [];
 
     for (const [id, card] of sessionCardsMap.entries()) {
-      if (card.parentId && sessionCardsMap.has(card.parentId)) {
+      // Forks are always top-level even if they carry a stale parentId
+      const isForkCard = isForkTitle(card.title);
+      if (!isForkCard && card.parentId && sessionCardsMap.has(card.parentId)) {
         const parentCard = sessionCardsMap.get(card.parentId);
-        parentCard.subAgents.push(card);
+        // Don't nest under a fork parent either
+        if (!isForkTitle(parentCard.title)) {
+          parentCard.subAgents.push(card);
+        } else {
+          rootCards.push(card);
+        }
       } else {
         rootCards.push(card);
       }
@@ -1917,7 +1943,7 @@ labels.forEach(function(data) {
               serverLastLogs.set(data.sessionId, { time: now, status: data.status, title: data.title });
             }
 
-            if (data.parentId && isSessionId(data.parentId)) {
+            if (data.parentId && isSessionId(data.parentId) && !isForkTitle(data.title) && !isForkTitle(cleanTitle(data.title))) {
               rememberSubAgentMetrics(data.parentId, data.sessionId, data);
             }
 
@@ -1987,16 +2013,24 @@ labels.forEach(function(data) {
               log('PARENT-AUTO', `Created parent placeholder: ${shortId(data.parentId)}`);
             }
 
-            const validParentId = (data.parentId && isSessionId(data.parentId)) ? data.parentId : null;
+            let validParentId = (data.parentId && isSessionId(data.parentId)) ? data.parentId : null;
+            // Forks must never be nested - ignore any parentId if title indicates a fork
+            if (validParentId && (isForkTitle(data.title) || isForkTitle(cleanTitle(data.title)))) {
+              validParentId = null;
+            }
             const isNew = !activeSessions.has(data.sessionId);
             const current = activeSessions.get(data.sessionId);
             
             let rawTitle = cleanTitle(data.title) || (validParentId ? 'Sub-Agent Task' : 'Active Terminal');
+            // Final fork guard after title resolution - forks are always top-level
+            if (isForkTitle(rawTitle) || isForkTitle(data.title) || isForkTitle(current?.title)) {
+              validParentId = null;
+            }
             if (current && current.title && current.title !== 'Active Terminal' && current.title !== 'Sub-Agent Task' && (rawTitle === 'Active Terminal' || rawTitle === 'Sub-Agent Task')) {
               rawTitle = current.title;
             }
 
-            const incomingStatus = data.status === 'user_response' && data.alarmEligible !== true ? 'waiting' : data.status;
+            const incomingStatus = data.status;
             const incomingError = Object.prototype.hasOwnProperty.call(data, 'error') ? data.error : (current ? current.error : undefined);
             const normalizedStatus = incomingStatus === 'waiting' && isInterruptedError(incomingError) ? 'interrupted' : incomingStatus;
             const prevStatus = current ? current.status : null;
